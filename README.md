@@ -1,11 +1,21 @@
 # ckpt-chaos
 
+[![PyPI](https://img.shields.io/pypi/v/ckpt-chaos)](https://pypi.org/project/ckpt-chaos/)
+[![tests](https://github.com/rkb32/ckpt-chaos/actions/workflows/test.yml/badge.svg)](https://github.com/rkb32/ckpt-chaos/actions/workflows/test.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/rkb32/ckpt-chaos/blob/main/LICENSE)
+
 Crash-consistency testing for ML training checkpoints.
 
 ckpt-chaos kills a training job at **every file boundary of a checkpoint save**, resumes it, and tells you
 what came back: a clean resume, a crash that needs manual cleanup, a *silent* resume with different
 weights, or lost work. It works on **your own unmodified training script** (any framework, or none),
 needs only the Python standard library for that, and exits non-zero on a failure so it can gate CI.
+
+![ckpt-chaos run on a script that overwrites its checkpoint in place, then on the same script writing a temp file and renaming it](https://raw.githubusercontent.com/rkb32/ckpt-chaos/main/docs/demo.gif)
+
+*A real run: the output was recorded and the waiting time shortened. The script that overwrites its
+checkpoint in place fails 4 kill points and exits 1; the same script writing a temp file and renaming
+it passes all 16 and exits 0. [How the GIF is made](https://github.com/rkb32/ckpt-chaos/blob/main/docs/make_demo.py).*
 
 ## Why
 

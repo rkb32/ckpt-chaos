@@ -1,0 +1,24 @@
+1/3 fault-free reference run (records every file event under {out}) ...
+    10 file events -> 15 crash points (+1 control), 1 at a time
+2/3 crashing and resuming ...
+3/3 judging
+
+crash point                                                newest ok  resume result              weights diff  verdict
+no crash (control)                                                 -  resumed from step None         0.00e+00  PASS
+#1 os.mkdir:out [before]                                           -  resumed from step 0            0.00e+00  PASS
+#2 open:state.json.tmp [before]                                    -  resumed from step 0            0.00e+00  PASS
+#3 os.rename:state.json.tmp [before]                               -  resumed from step 0            0.00e+00  PASS
+#4 open:state.json.tmp [before]                                    -  resumed from step 5            0.00e+00  PASS
+#5 os.rename:state.json.tmp [before]                               -  resumed from step 5            0.00e+00  PASS
+#6 open:state.json.tmp [before]                                    -  resumed from step 10           0.00e+00  PASS
+#7 os.rename:state.json.tmp [before]                               -  resumed from step 10           0.00e+00  PASS
+#8 open:state.json.tmp [before]                                    -  resumed from step 15           0.00e+00  PASS
+#9 os.rename:state.json.tmp [before]                               -  resumed from step 15           0.00e+00  PASS
+#10 open:result.json [before]                                      -  resumed from step 20           0.00e+00  PASS
+#2 open:state.json.tmp [torn]                                      -  resumed from step 0            0.00e+00  PASS
+#4 open:state.json.tmp [torn]                                      -  resumed from step 5            0.00e+00  PASS
+#6 open:state.json.tmp [torn]                                      -  resumed from step 10           0.00e+00  PASS
+#8 open:state.json.tmp [torn]                                      -  resumed from step 15           0.00e+00  PASS
+#10 open:result.json [torn]                                        -  resumed from step 20           0.00e+00  PASS
+
+PASS: 16
