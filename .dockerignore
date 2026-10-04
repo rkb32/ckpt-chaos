@@ -1,0 +1,7 @@
+.venv
+.git
+runs
+tests
+experiments
+__pycache__
+matrix_*.txt
