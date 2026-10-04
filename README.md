@@ -23,7 +23,7 @@ stated limits (one filesystem, one node, a synthetic workload) are this tool's s
 ## Try it on your own script
 
 ```bash
-git clone https://github.com/rkb32/ckpt-chaos && cd ckpt-chaos && pip install -e .     # not on PyPI yet
+pip install git+https://github.com/rkb32/ckpt-chaos        # a PyPI release is pending
 
 # put {out} where your command takes its output / checkpoint directory
 ckpt-chaos run --step-regex "resumed from step (\d+)" --result-file "{out}/final.pt" \
@@ -102,10 +102,13 @@ Each run is one crash point; the control run has no crash and a clean one counts
   a kill at any earlier point leaves a folder that makes the resume raise (`FileNotFoundError`, `ValueError`,
   `SafetensorError`) until someone deletes it by hand. This is the behaviour behind
   [#35525](https://github.com/huggingface/transformers/issues/35525).
-- **Multi-rank only: silent divergence.** If rank 1 dies before writing `rng_state_1.pth`, rank 0 finishes
-  the checkpoint and `trainer_state.json`. The resume then succeeds from that folder, logs nothing, and ends
-  with weights 1.65e-4 away from the uninterrupted run. The model and optimizer are intact; exact
-  reproducibility is lost. A single process cannot produce this state.
+- **Multi-rank only: divergence without an error.** If rank 1 dies before writing `rng_state_1.pth`, rank 0
+  finishes the checkpoint and `trainer_state.json`. The resume then succeeds from that folder and ends with
+  weights 1.65e-4 away from the uninterrupted run. The model and optimizer are intact; exact reproducibility
+  is lost. A single process cannot produce this state. This is documented behaviour, not a hidden one:
+  Hugging Face logs "Didn't find an RNG file for process 1 ... reproducibility is not guaranteed", but at
+  INFO level, so it is invisible at the default log level (and the harness runs with
+  `TRANSFORMERS_VERBOSITY=error`). It is reported here because nothing stops the job or says so by default.
 - **Lightning is atomic per file, and the matrix shows it.** `_atomic_save` writes each checkpoint to a temp
   file in the system temp directory inside an fsspec transaction, then renames it into place, so no crash
   point leaves a broken checkpoint, with 1 or 2 ranks. The two LOST_WORK rows are a crash between installing
