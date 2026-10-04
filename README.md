@@ -23,7 +23,7 @@ stated limits (one filesystem, one node, a synthetic workload) are this tool's s
 ## Try it on your own script
 
 ```bash
-pip install git+https://github.com/rkb32/ckpt-chaos        # a PyPI release is pending
+pip install ckpt-chaos
 
 # put {out} where your command takes its output / checkpoint directory
 ckpt-chaos run --step-regex "resumed from step (\d+)" --result-file "{out}/final.pt" \
