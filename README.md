@@ -141,6 +141,23 @@ ranks. It shows the harness can say PASS, and that it can find a protocol that i
 - Not claimed: that Hugging Face's code failed in exactly this way. #36076 was reported on Linux with a
   different error ("Directory not empty"); the Windows race gives the same class of failure, not the same bug.
 
+## Reproduce the Hugging Face results
+
+```bash
+pip install torch transformers accelerate
+ckpt-chaos bench hf_trainer                  # 1 process: 17 HARD_FAIL, 1 PASS (plus a passing control)
+ckpt-chaos bench hf_trainer --ranks 2        # 2 ranks: 19 HARD_FAIL, 2 SILENT_DIVERGENCE
+# the same, but get_last_checkpoint skips a folder whose trainer_state.json is missing or unparseable:
+CKPT_CHAOS_PATCH=skip_incomplete ckpt-chaos bench hf_trainer             # 1 process: 19 of 19 PASS
+CKPT_CHAOS_PATCH=skip_incomplete ckpt-chaos bench hf_trainer --ranks 2   # 19 PASS, 2 SILENT_DIVERGENCE, 1 HARD_FAIL
+```
+
+To test any other change to a library without touching the installed copy, copy its package to a folder,
+edit the copy, and run with `CKPT_CHAOS_PREPEND_PYTHONPATH=<that folder>`. That is how the open pull request
+[#39599](https://github.com/huggingface/transformers/pull/39599) (continue resuming when `trainer_state.json`
+is missing) was tested: the same single-process matrix gave 9 HARD_FAIL, 8 SILENT_DIVERGENCE and 2 PASS,
+because the resumed run restarts at step 0 on the weights of the incomplete folder.
+
 ## Filesystem roundtrip (no crash involved)
 
 `ckpt-chaos roundtrip --dir DIR --n 200 --writer torch|lightning` saves a checkpoint, loads it straight back,

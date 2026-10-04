@@ -81,11 +81,12 @@ def main(argv: list[str] | None = None) -> int:
         return _exit_code(rows, DEFAULT_FAIL_ON)
 
     if a.cmd == "bench":
-        from .runner import ROOT, TARGETS, flake_check, print_table, run_matrix
+        from .runner import TARGETS, flake_check, print_table, run_matrix
 
         if a.target not in TARGETS:
             ap.error(f"target must be one of {sorted(TARGETS)}")
-        work = a.work or ROOT / "runs" / time.strftime("%Y%m%d-%H%M%S")
+        # absolute, because the child processes run from the package's directory, not from here
+        work = (a.work or Path("ckpt-chaos-runs") / time.strftime("%Y%m%d-%H%M%S")).resolve()
         if a.flake:
             failed, total = flake_check(work, a.jobs, a.ranks, a.target, a.strategy, a.flake)
             print(f"{a.target}/{a.strategy}, {a.ranks} rank(s), {a.jobs} concurrent: {failed}/{total} fault-free runs failed")
@@ -100,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     from .byo import run_byo
     from .runner import print_table
 
-    rows = run_byo(command, _split(a.resume_cmd) if a.resume_cmd else None, a.work, jobs=a.jobs, timeout=a.timeout,
+    rows = run_byo(command, _split(a.resume_cmd) if a.resume_cmd else None, a.work.resolve(), jobs=a.jobs, timeout=a.timeout,
                    max_points=a.max_points, result_file=a.result_file, result_cmd=a.result_cmd, step_regex=a.step_regex)
     print_table(rows)
     return _exit_code(rows, a.fail_on)
