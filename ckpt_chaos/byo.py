@@ -1,0 +1,153 @@
+"""`ckpt-chaos run`: crash-test any training command without changing the user's code.
+
+The command contains `{out}` where it takes its output / checkpoint directory. The harness only ever
+creates and writes inside its own per-run `{out}` directories. A fault-free run records every file event
+the command makes under `{out}`; then one copy of the command is killed at each of those events (or an
+evenly spaced sample of them), the resume command (default: the same command) is run on the same
+directory, and the outcome is judged.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
+from pathlib import Path
+
+from .invariants import ResumeOutcome
+from .runner import Row, _events, print_table, rejudge
+
+BOOT = Path(__file__).resolve().parent / "_boot"
+PKG_PARENT = Path(__file__).resolve().parent.parent
+
+
+def _sub(cmd: list[str], out: Path) -> list[str]:
+    return [a.replace("{out}", str(out)) for a in cmd]
+
+
+def _env(extra: dict | None = None) -> dict:
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    old = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join([str(BOOT), str(PKG_PARENT)] + ([old] if old else []))
+    env.update(extra or {})
+    return env
+
+
+def _run(cmd: list[str], env: dict, cwd: str, timeout: int) -> tuple[int, str]:
+    try:
+        p = subprocess.run(cmd, env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                           encoding="utf-8", errors="replace")
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
+    except subprocess.TimeoutExpired:
+        return -9, "TIMEOUT"
+
+
+def _result(out: Path, result_file: str | None, result_cmd: str | None, cwd: str, timeout: int) -> str | None:
+    """A comparable fingerprint of what the run produced, or None if the user gave no way to check."""
+    if result_file:
+        p = Path(result_file.replace("{out}", str(out)))
+        return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else "MISSING"
+    if result_cmd:
+        rc, text = _run(shlex.split(result_cmd.replace("{out}", str(out)), posix=os.name != "nt"), _env(), cwd, timeout)
+        return text.strip() if rc == 0 else f"ERROR({rc})"
+    return None
+
+
+def _select(events: list, max_points: int, modes: tuple[str, ...]) -> list[tuple[int, str]]:
+    points = [(n, "before") for n, *_ in events]
+    if "torn" in modes:
+        points += [(n, "torn") for n, _, _, tornable in events if tornable]
+    if len(points) > max_points:
+        stride = len(points) / max_points
+        points = [points[int(i * stride)] for i in range(max_points)]
+    return points
+
+
+def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int = 1, timeout: int = 600,
+            max_points: int = 40, result_file: str | None = None, result_cmd: str | None = None,
+            step_regex: str | None = None, modes: tuple[str, ...] = ("before", "torn")) -> list[Row]:
+    if not any("{out}" in a for a in train):
+        raise SystemExit("put {out} in your command where it takes its output / checkpoint directory, "
+                         "for example: -- python train.py --output_dir {out}")
+    cwd = os.getcwd()
+    work.mkdir(parents=True, exist_ok=True)
+    resume = resume or train
+    step_re = re.compile(step_regex) if step_regex else None
+
+    def armed(wd: Path, out: Path, crash=None, mode="before") -> dict:
+        extra = {"CKPT_CHAOS_WATCH": str(out), "CKPT_CHAOS_LOG": str(wd / "events.log"), "CKPT_CHAOS_TORN_PYTHON": "1"}
+        if crash:
+            extra.update(CKPT_CHAOS_CRASH_AT=str(crash), CKPT_CHAOS_MODE=mode)
+        return extra
+
+    print("1/3 fault-free reference run (records every file event under {out}) ...", flush=True)
+    ref = work / "reference"
+    ref.mkdir(parents=True, exist_ok=True)
+    ref_out = ref / "out"
+    rc, text = _run(_sub(train, ref_out), _env(armed(ref, ref_out)), cwd, timeout)
+    if rc != 0:
+        raise SystemExit(f"your command failed on its own (exit {rc}) before any crash was injected:\n{text[-1200:]}")
+    events = _events(ref / "events.log.rank0")
+    if not events:
+        raise SystemExit("the command made no file changes under {out}. Does it write its checkpoints there?")
+    ref_result = _result(ref_out, result_file, result_cmd, cwd, timeout)
+    plan = {n: (n, kind, name, tornable) for n, kind, name, tornable in events}
+    points = _select(events, max_points, modes)
+    print(f"    {len(events)} file events -> {len(points)} crash points (+1 control), {jobs} at a time", flush=True)
+    if ref_result is None:
+        print("    note: no --result-file / --result-cmd, so silent divergence cannot be detected", flush=True)
+
+    def judge_result(out: Path) -> float:
+        got = _result(out, result_file, result_cmd, cwd, timeout)
+        return 0.0 if ref_result is None or got == ref_result else 1.0
+
+    def record(order: int, wd: Path, label: str, rc: int, crashed: bool, drift: bool, outcome: ResumeOutcome) -> dict:
+        rec = {"order": order, "label": label, "rc": rc, "crashed": crashed, "drift": drift, "outcome": asdict(outcome)}
+        (wd / "result.json").write_text(json.dumps(rec))
+        return rec
+
+    def control(order: int) -> dict:
+        wd = work / "pt_control"
+        wd.mkdir(parents=True, exist_ok=True)
+        out = wd / "out"
+        rc, _ = _run(_sub(train, out), _env(armed(wd, out)), cwd, timeout)
+        diff = judge_result(out) if rc == 0 else None
+        return record(order, wd, "no crash (control)", rc, False, False,
+                      ResumeOutcome(None if rc == 0 else f"ExitCode{rc}", None, 0, diff))
+
+    def one(order: int, point: tuple[int, str]) -> dict:
+        n, mode = point
+        wd = work / f"pt_{order:03d}"
+        wd.mkdir(parents=True, exist_ok=True)
+        out = wd / "out"
+        rc, _ = _run(_sub(train, out), _env(armed(wd, out, n, mode)), cwd, timeout)
+        seen = _events(wd / "events.log.rank0")
+        drift = not seen or seen[-1][:3] != plan[n][:3]
+        rrc, rtext = _run(_sub(resume, out), _env(), cwd, timeout)  # the resume run is not armed
+        raised = None if rrc == 0 else ("Timeout" if rtext == "TIMEOUT" else f"ExitCode{rrc}")
+        step = None
+        if step_re and raised is None:
+            m = step_re.search(rtext)
+            step = int(m.group(1)) if m else None
+        diff = judge_result(out) if raised is None else None
+        label = f"#{n} {plan[n][1]}:{plan[n][2]} [{mode}]"
+        return record(order, wd, label, rc, rc != 0, drift, ResumeOutcome(raised, step, 0, diff))
+
+    print("2/3 crashing and resuming ...", flush=True)
+    with ThreadPoolExecutor(jobs) as ex:
+        futures = [ex.submit(control, 0)] + [ex.submit(one, i + 1, p) for i, p in enumerate(points)]
+        for f in futures:
+            f.result()
+    print("3/3 judging\n", flush=True)
+    rows = rejudge(work)
+    ctl = next((r for r in rows if r.label.startswith("no crash")), None)
+    if ctl is not None and ctl.verdict == "SILENT_DIVERGENCE":
+        print("WARNING: two fault-free runs of your command produced different results, so training is not "
+              "reproducible run to run. Divergence verdicts below are unreliable until you fix seeds / "
+              "determinism or give --result-cmd that compares with a tolerance.\n", flush=True)
+    return rows

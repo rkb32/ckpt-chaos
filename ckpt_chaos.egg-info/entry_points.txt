@@ -1,0 +1,2 @@
+[console_scripts]
+ckpt-chaos = ckpt_chaos.cli:main

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ckpt-chaos"
+version = "0.1.0"
+description = "Crash-consistency testing for ML training checkpoints: kill a save at every file boundary, resume, classify the outcome."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []  # the `run` command needs only the standard library; your own script brings its framework
+
+[project.optional-dependencies]
+bench = ["torch", "transformers", "accelerate", "lightning"]  # only for the built-in `bench` targets
+
+[project.scripts]
+ckpt-chaos = "ckpt_chaos.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ckpt_chaos*"]
+
+[tool.setuptools.package-data]
+ckpt_chaos = ["_boot/*.py"]

@@ -19,9 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import torch
-
-from .invariants import ResumeOutcome, classify
+from .invariants import ResumeOutcome, classify  # torch is imported lazily: `run` mode needs only the stdlib
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = {
@@ -106,6 +104,8 @@ def _newest_complete(out: Path, healthy: dict[str, int]) -> int:
 
 def _lightning_newest(out: Path, healthy: dict[str, int]) -> int:
     """Lightning checkpoints are single .ckpt files: complete means it loads, newest means highest global_step."""
+    import torch
+
     best = 0
     for p in (out / "checkpoints").glob("*.ckpt"):
         try:
@@ -119,6 +119,8 @@ NEWEST = {"lightning_trainer": _lightning_newest}  # targets whose layout is not
 
 
 def _weights_diff(ref: Path, got: Path) -> float:
+    import torch
+
     a = torch.load(ref, map_location="cpu", weights_only=True)
     b = torch.load(got, map_location="cpu", weights_only=True)
     if a.keys() != b.keys():
@@ -249,6 +251,7 @@ def flake_check(work: Path, jobs: int, ranks: int, target: str, strategy: str, n
 
 
 def print_table(rows: list[Row]) -> None:
+    known = any(r.outcome.newest_complete_step for r in rows)  # `run` mode cannot tell which checkpoints are complete
     print(f"{'crash point':<58}{'newest ok':>10}  {'resume result':<26}{'weights diff':>13}  verdict")
     for r in rows:
         o = r.outcome
@@ -256,8 +259,9 @@ def print_table(rows: list[Row]) -> None:
         if not o.raised and not o.ranks_agree:
             result += " (ranks differ)"
         diff = "-" if o.weights_diff is None else f"{o.weights_diff:.2e}"
+        newest = str(o.newest_complete_step) if known else "-"
         flag = "" if r.crashed or r.label.startswith("no crash") else "  [DID NOT CRASH]"
         flag += "  [PLAN DRIFT]" if r.drift else ""
-        print(f"{r.label:<58}{o.newest_complete_step:>10}  {result:<26}{diff:>13}  {r.verdict}{flag}")
+        print(f"{r.label:<58}{newest:>10}  {result:<26}{diff:>13}  {r.verdict}{flag}")
     counts = Counter(r.verdict for r in rows)
     print("\n" + "  ".join(f"{v}: {c}" for v, c in sorted(counts.items())))

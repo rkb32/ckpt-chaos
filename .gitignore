@@ -3,3 +3,4 @@ runs/
 __pycache__/
 matrix_*.txt
 gate_out.txt
+ckpt-chaos-runs/

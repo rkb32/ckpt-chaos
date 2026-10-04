@@ -1,0 +1,6 @@
+
+[bench]
+torch
+transformers
+accelerate
+lightning

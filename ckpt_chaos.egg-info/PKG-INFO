@@ -1,11 +1,22 @@
+Metadata-Version: 2.4
+Name: ckpt-chaos
+Version: 0.1.0
+Summary: Crash-consistency testing for ML training checkpoints: kill a save at every file boundary, resume, classify the outcome.
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Provides-Extra: bench
+Requires-Dist: torch; extra == "bench"
+Requires-Dist: transformers; extra == "bench"
+Requires-Dist: accelerate; extra == "bench"
+Requires-Dist: lightning; extra == "bench"
+
 # ckpt-chaos
 
 Crash-consistency testing for ML training checkpoints.
 
 ckpt-chaos kills a training job at **every file boundary of a checkpoint save**, resumes it, and tells you
 what came back: a clean resume, a crash that needs manual cleanup, a *silent* resume with different
-weights, or lost work. It works on **your own unmodified training script** (any framework, or none),
-needs only the Python standard library for that, and exits non-zero on a failure so it can gate CI.
+weights, or lost work. It runs on CPU (gloo ranks), so no GPU is needed.
 
 ## Why
 
@@ -20,48 +31,17 @@ It builds on the single-node, single-filesystem study
 [Crash-Consistent Checkpointing for AI Training on macOS/APFS](https://arxiv.org/abs/2511.18323), whose
 stated limits (one filesystem, one node, a synthetic workload) are this tool's starting points.
 
-## Try it on your own script
+## Run it
 
 ```bash
-git clone https://github.com/rkb32/ckpt-chaos && cd ckpt-chaos && pip install -e .     # not on PyPI yet
-
-# put {out} where your command takes its output / checkpoint directory
-ckpt-chaos run --step-regex "resumed from step (\d+)" --result-file "{out}/final.pt" \
-    -- python train.py --output_dir {out}
+python -m ckpt_chaos hf_trainer                      # single process, HF Trainer
+python -m ckpt_chaos hf_trainer --ranks 2            # two gloo ranks
+python -m ckpt_chaos loop_ddp --ranks 2 --strategy tmp_rename_rank0
+python -m ckpt_chaos loop_ddp --ranks 2 --strategy tmp_rename --flake 25   # repeat the fault-free job, count failures
+python -m ckpt_chaos hf_trainer --judge runs/<dir>   # re-apply the rules to a finished run
 ```
 
-It runs your command once fault-free to record every file it creates, renames or removes under `{out}`,
-then kills a fresh copy at each of those events (and, for files written by `torch.save`, safetensors or
-Python's `open()`, a second copy with the file cut in half). Each time it runs your resume command
-(`--resume-cmd`, default: the same command) and compares what came back with the fault-free run.
-It only ever writes inside `{out}` directories it creates itself, and exits 1 on `HARD_FAIL`,
-`SILENT_DIVERGENCE` or a failing control (`--fail-on` changes that).
-
-Two ordinary scripts are included, with no changes to either:
-
-| Command | Result |
-|---|---|
-| `ckpt-chaos run ... -- python examples/naive_torch.py --out {out}` (saves with `torch.save` over the old file) | 6 HARD_FAIL, 10 PASS, exit 1: a torn write at any checkpoint destroys the only copy |
-| `ckpt-chaos run ... -- python examples/naive_torch.py --out {out} --atomic` (temp file + `os.replace`) | 22 / 22 PASS, exit 0 |
-| `examples/naive_json.py`, no torch, JSON checkpoints | same split; covered by `tests/test_byo.py` |
-
-Options worth knowing: `--result-cmd` (compare with a tolerance), `--max-points` (sample long runs),
-`--jobs` (keep 1 on a shared GPU), `--timeout`. If two fault-free runs of your command already differ
-(unseeded training), the report says so, because divergence verdicts mean nothing then.
-`run` mode cannot tell which checkpoints were complete, so it does not report `LOST_WORK` or the
-"newest ok" column.
-
-### The built-in targets
-
-```bash
-ckpt-chaos bench hf_trainer                       # HF Trainer, single process (needs torch, transformers, accelerate)
-ckpt-chaos bench hf_trainer --ranks 2             # two gloo ranks
-ckpt-chaos bench lightning_trainer --ranks 2      # needs lightning
-ckpt-chaos bench loop_ddp --ranks 2 --strategy tmp_rename --flake 25   # repeat the fault-free job, count failures
-ckpt-chaos judge runs/<dir>                       # re-apply the verdict rules to a finished run
-```
-
-Tests: `python -m unittest discover tests`.
+Needs `torch` (CPU is fine), `transformers` and `accelerate`. Tests: `python -m unittest discover tests`.
 
 ## How it works
 
@@ -143,9 +123,7 @@ ranks. It shows the harness can say PASS, and that it can find a protocol that i
 - Crashes are emulated by killing the process (`os._exit`) at a file event. That is not power loss: data
   the OS had not flushed is not lost, and writes are not reordered. Real power-loss testing needs kernel
   level injection or hardware.
-- Torn writes cover `torch.save`, safetensors and Python's `open()` (in `run` mode). Writers that call C code
-  directly, such as h5py (Keras `.h5`) or tensorstore (Orbax), are only crashed before or after, not torn.
-- The `bench` targets tear only `torch.save` and safetensors, so their matrices keep the numbers above.
+- Python-written files (the JSON ones) are not torn yet, only whole-file absent or present.
 - After one rank dies, the others run on for a few seconds before they are stopped, which is realistic
   but timing dependent.
 - Tested so far: transformers 5.18.0 and Lightning 2.6.6 on Windows/NTFS with CPU gloo ranks. The
@@ -154,5 +132,9 @@ ranks. It shows the harness can say PASS, and that it can find a protocol that i
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md): the features ranked by the evidence behind them (what developers actually
-report in GitHub issues and papers), what is done, and what is not verified.
+- `torch.distributed.checkpoint` target
+- Linux runs on ext4 and overlayfs (a `Dockerfile` is included but untested), including the filesystem in
+  [Lightning #21431](https://github.com/Lightning-AI/pytorch-lightning/issues/21431): a checkpoint saved in
+  Docker on Windows/WSL that is sometimes unreadable right after saving, with no crash involved
+- torn writes for Python-written files
+- power-loss emulation on Linux
