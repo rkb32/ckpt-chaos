@@ -53,7 +53,25 @@ def main(argv: list[str] | None = None) -> int:
     j = sub.add_parser("judge", help="re-judge a finished run directory")
     j.add_argument("run_dir", type=Path)
 
+    t = sub.add_parser("roundtrip", help="save a checkpoint and load it straight back N times on a filesystem")
+    t.add_argument("--dir", type=Path, required=True, help="directory on the filesystem to test")
+    t.add_argument("--n", type=int, default=200)
+    t.add_argument("--writer", choices=["torch", "lightning"], default="torch")
+    t.add_argument("--size-mb", type=float, default=20.0)
+    t.add_argument("--unique-paths", action="store_true", help="a new file each time (default: overwrite one file)")
+    t.add_argument("--sleep", type=float, default=0.0, help="seconds between the save and the load")
+
     a = ap.parse_args(argv)
+
+    if a.cmd == "roundtrip":
+        from .roundtrip import run_roundtrip
+
+        failed, errors = run_roundtrip(a.dir, a.n, a.writer, a.size_mb, not a.unique_paths, a.sleep)
+        print(f"{a.writer} roundtrip on {a.dir}: {failed}/{a.n} saves unreadable "
+              f"({a.size_mb:g} MB, {'one file overwritten' if not a.unique_paths else 'new file each time'}, sleep {a.sleep}s)")
+        for msg, count in errors.most_common(5):
+            print(f"    {count} x {msg}")
+        return 1 if failed else 0
 
     if a.cmd == "judge":
         from .runner import print_table, rejudge

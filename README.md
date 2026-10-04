@@ -141,6 +141,24 @@ ranks. It shows the harness can say PASS, and that it can find a protocol that i
 - Not claimed: that Hugging Face's code failed in exactly this way. #36076 was reported on Linux with a
   different error ("Directory not empty"); the Windows race gives the same class of failure, not the same bug.
 
+## Filesystem roundtrip (no crash involved)
+
+`ckpt-chaos roundtrip --dir DIR --n 200 --writer torch|lightning` saves a checkpoint, loads it straight back,
+and repeats, for reports like [Lightning #21431](https://github.com/Lightning-AI/pytorch-lightning/issues/21431)
+(a save that is sometimes unreadable right after writing, in Docker on Windows/WSL). With the included
+`Dockerfile` on Docker Desktop for Windows, 8 MB checkpoints, one file overwritten each time:
+
+| Filesystem | `torch.save`, 200 saves | Lightning `save_checkpoint`, 100 saves |
+|---|---|---|
+| container overlayfs | 0 unreadable | 0 unreadable |
+| Docker volume (ext4 in the VM) | 0 | 0 |
+| bind mount of a Windows folder | 0 | 0 |
+| tmpfs (control) | 0 | 0 |
+
+The Windows host itself (NTFS) gave 0 of 100 (torch) and 0 of 40 (Lightning). **#21431 did not reproduce.**
+The reporter's model size, versions and hardware differ from mine, so this does not show the report is
+wrong; it shows these four setups do not trigger it.
+
 ## Limits
 
 - Crashes are emulated by killing the process (`os._exit`) at a file event. That is not power loss: data

@@ -36,6 +36,9 @@ def _env(extra=None) -> dict:
         HF_HUB_DISABLE_PROGRESS_BARS="1", TOKENIZERS_PARALLELISM="false",
         OMP_NUM_THREADS="2", MKL_NUM_THREADS="2",
     )
+    extra_path = os.environ.get("CKPT_CHAOS_PREPEND_PYTHONPATH")  # load a patched copy of a library, e.g. for a PR
+    if extra_path:
+        env["PYTHONPATH"] = os.pathsep.join([str(Path(extra_path).resolve()), env["PYTHONPATH"]])
     env.update(extra or {})
     return env
 

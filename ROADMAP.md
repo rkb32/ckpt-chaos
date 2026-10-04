@@ -61,7 +61,7 @@ neither is represented above. Reading them needs a signed-in browser.
 | 4 | **GitHub Action + job summary** (markdown table, JUnit) | Where developers already are; one line of YAML to adopt | next |
 | 5 | **Repro generator**: for each failing point, a minimal standalone script plus ready-to-file issue text | Every upstream issue filed with it carries the tool to a framework's own users | next |
 | 6 | **Public scoreboard**: framework x version x verdict, regenerated in CI | The shareable result: "we killed N trainers mid-save, here is who survived". Needs more targets (torchtune, accelerate, DeepSpeed, ms-swift, LLaMA-Factory, Axolotl, Unsloth, ultralytics, Ray Train, Keras) | planned |
-| 7 | Filesystem mode: save, reload, repeat N times per filesystem (Docker volume, overlayfs, bind mount, NFS) | Lightning #21431 has no crash at all. A `Dockerfile` is included but untested | planned |
+| 7 | Filesystem mode: save, reload, repeat N times per filesystem (Docker volume, overlayfs, bind mount, NFS) | Lightning #21431 has no crash at all | **done** (`ckpt-chaos roundtrip`). It could **not** reproduce #21431 on Docker Desktop: 0 failures in 8 filesystem x writer combinations. NFS and a WSL distro not tried |
 | 8 | Preemption mode: SIGTERM, then a grace period, then SIGKILL | Spot-instance training. Linux only | planned |
 | 9 | Data-pipeline state check (same samples after a resume) | litdata #263 and the forum threads | planned |
 | 10 | `run` mode with several ranks; native-writer tearing for h5py / tensorstore | Completes distributed and Keras / Orbax coverage | planned |

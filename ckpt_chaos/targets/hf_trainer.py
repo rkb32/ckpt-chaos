@@ -66,12 +66,42 @@ def save_final(trainer, out):
     torch.save(trainer.model.state_dict(), os.path.join(out, f"final_rank{RANK}.pt"))
 
 
+def _patch_skip_incomplete():
+    """Experiment: make auto-resume ignore a checkpoint-N folder whose trainer_state.json (written last) is
+    missing or unparseable. Enabled with CKPT_CHAOS_PATCH=skip_incomplete to test that proposed change."""
+    import re
+
+    import transformers.trainer as T
+    from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+
+    def complete(folder):
+        try:
+            with open(os.path.join(folder, "trainer_state.json")) as f:
+                json.load(f)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def get_last_checkpoint(folder):
+        pat = re.compile("^" + PREFIX_CHECKPOINT_DIR + r"\-(\d+)$")
+        found = sorted(((int(m.group(1)), p) for p in os.listdir(folder)
+                        if (m := pat.match(p)) and os.path.isdir(os.path.join(folder, p))), reverse=True)
+        for _, p in found:
+            if complete(os.path.join(folder, p)):
+                return os.path.join(folder, p)
+        return None
+
+    T.get_last_checkpoint = get_last_checkpoint
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("phase", choices=["reference", "train", "resume"])
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    if os.environ.get("CKPT_CHAOS_PATCH") == "skip_incomplete":
+        _patch_skip_incomplete()
 
     if a.phase == "reference":
         t = make_trainer(a.out, Hooks())
