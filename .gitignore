@@ -7,3 +7,4 @@ ckpt-chaos-runs/
 *.egg-info/
 build/
 dist/
+*.log
