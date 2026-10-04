@@ -4,3 +4,6 @@ __pycache__/
 matrix_*.txt
 gate_out.txt
 ckpt-chaos-runs/
+*.egg-info/
+build/
+dist/
