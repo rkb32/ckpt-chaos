@@ -1,0 +1,5 @@
+.venv/
+runs/
+__pycache__/
+matrix_*.txt
+gate_out.txt
