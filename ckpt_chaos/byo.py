@@ -12,6 +12,7 @@ import glob
 import hashlib
 import json
 import os
+import platform
 import re
 import shlex
 import subprocess
@@ -25,6 +26,20 @@ from .runner import Row, _events, print_table, rejudge
 
 BOOT = Path(__file__).resolve().parent / "_boot"
 PKG_PARENT = Path(__file__).resolve().parent.parent
+VERSIONED = ("ckpt-chaos", "torch", "transformers", "lightning", "safetensors", "accelerate", "numpy")
+
+
+def _versions() -> dict:
+    """What a bug report needs to say about the machine: Python, OS and the packages that usually matter."""
+    from importlib import metadata
+
+    out = {"python": sys.version.split()[0], "platform": platform.platform()}
+    for pkg in VERSIONED:
+        try:
+            out[pkg] = metadata.version(pkg)
+        except metadata.PackageNotFoundError:
+            pass
+    return out
 
 
 def _sub(cmd: list[str], out: Path) -> list[str]:
@@ -145,6 +160,12 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
         print(f"    contract: {len(ref_ckpts)} checkpoints in the fault-free run, steps "
               f"{sorted(s for s, _ in ref_ckpts.values())}", flush=True)
     plan ={n: (n, kind, name, tornable) for n, kind, name, tornable in events}
+    # what `ckpt-chaos repro` needs to rebuild one crash point on its own
+    (work / "meta.json").write_text(json.dumps({
+        "train": train, "resume": resume, "step_regex": step_regex, "checkpoint_glob": checkpoint_glob,
+        "ignore_size": ignore_size, "result_file": result_file, "result_cmd": result_cmd, "work": str(work),
+        "reference_steps": sorted(s for s, _ in ref_ckpts.values()) if ref_ckpts else None, "versions": _versions(),
+    }, indent=1), encoding="utf-8")
     points = _select(events, max_points, modes)
     print(f"    {len(events)} file events -> {len(points)} crash points (+1 control), {jobs} at a time", flush=True)
     if ref_result is None:
@@ -154,9 +175,11 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
         got = _result(out, result_file, result_cmd, cwd, timeout)
         return 0.0 if ref_result is None or got == ref_result else 1.0
 
-    def record(order: int, wd: Path, label: str, rc: int, crashed: bool, drift: bool, outcome: ResumeOutcome) -> dict:
+    def record(order: int, wd: Path, label: str, rc: int, crashed: bool, drift: bool, outcome: ResumeOutcome,
+               extra: dict | None = None) -> dict:
         rec = {"order": order, "label": label, "rc": rc, "crashed": crashed, "drift": drift, "outcome": asdict(outcome)}
-        (wd / "result.json").write_text(json.dumps(rec))
+        rec.update(extra or {})
+        (wd / "result.json").write_text(json.dumps(rec), encoding="utf-8")
         return rec
 
     def control(order: int) -> dict:
@@ -187,7 +210,8 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
                 unmatched.append(order)
         diff = judge_result(out) if raised is None else None
         label = f"#{n} {plan[n][1]}:{plan[n][2]} [{mode}]"
-        return record(order, wd, label, rc, rc != 0, drift, ResumeOutcome(raised, step, newest, diff))
+        extra = {"point": [n, mode], "event": [plan[n][1], plan[n][2]], "resume_tail": rtext[-1500:]}
+        return record(order, wd, label, rc, rc != 0, drift, ResumeOutcome(raised, step, newest, diff), extra)
 
     print("2/3 crashing and resuming ...", flush=True)
     with ThreadPoolExecutor(jobs) as ex:

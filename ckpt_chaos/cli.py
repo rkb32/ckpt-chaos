@@ -89,6 +89,11 @@ def main(argv: list[str] | None = None) -> int:
     j = sub.add_parser("judge", help="re-judge a finished run directory")
     j.add_argument("run_dir", type=Path)
 
+    p = sub.add_parser("repro", help="write a standalone repro.py and a draft ISSUE.md for each failing crash point of a run")
+    p.add_argument("run_dir", type=Path)
+    p.add_argument("--dest", type=Path, help="where to write (default: RUN_DIR/repro)")
+    p.add_argument("--limit", type=int, default=3, help="how many failing crash points to write (one of each verdict first)")
+
     t = sub.add_parser("roundtrip", help="save a checkpoint and load it straight back N times on a filesystem")
     t.add_argument("--dir", type=Path, required=True, help="directory on the filesystem to test")
     t.add_argument("--n", type=int, default=200)
@@ -108,6 +113,18 @@ def main(argv: list[str] | None = None) -> int:
         for msg, count in errors.most_common(5):
             print(f"    {count} x {msg}")
         return 1 if failed else 0
+
+    if a.cmd == "repro":
+        from .repro import write
+
+        dirs = write(a.run_dir.resolve(), (a.dest or a.run_dir / "repro").resolve(), a.limit)
+        if not dirs:
+            print("no failing crash points in this run: nothing to reproduce")
+            return 0
+        for d in dirs:
+            print(d)
+        print("\nCopy repro.py into your project root and run it there; ISSUE.md is the draft text.")
+        return 0
 
     if a.cmd == "judge":
         from .runner import print_table, rejudge

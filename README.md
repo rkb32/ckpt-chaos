@@ -83,6 +83,19 @@ from step 0"), every one with exit code 0 from the job itself.
 - `LOST_WORK` is reported but does not fail the run unless you add it to `--fail-on`.
 - Checked so far on the stdlib examples only, not yet on a real framework's resume.
 
+### Turn a failure into an issue
+
+```bash
+ckpt-chaos repro ckpt-chaos-runs/<timestamp>     # writes repro/<verdict>-<step>-<mode>/ for up to 3 failing points
+cp ckpt-chaos-runs/<timestamp>/repro/lost_work-004-before/repro.py .   # from your project root
+python repro.py
+```
+
+Each folder has a `repro.py` that rebuilds the failure on its own (fault-free run, kill at the same file event, resume,
+verdict; repeated 3 times) and an `ISSUE.md` draft with the expected and observed behaviour, versions, and the end of the
+resume output with local paths removed. Paste the output of `repro.py` into the draft before filing. The script imports
+ckpt-chaos internals, so run it with the same ckpt-chaos version as the run (the draft pins it).
+
 ## Use it in CI (GitHub Action)
 
 ```yaml
