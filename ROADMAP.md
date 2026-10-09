@@ -57,7 +57,7 @@ neither is represented above. Reading them needs a signed-in browser.
 |---|---|---|---|
 | 1 | **Run on any unmodified script** (`ckpt-chaos run`) | The issues above span a dozen frameworks and many custom loops; nobody will rewrite their trainer to try a tool | **done** |
 | 2 | Torn writes for Python `open()` files (json, pickle, numpy, yaml) | Most scripts write checkpoints that way, not only through `torch.save` | **done** |
-| 3 | **Resume-contract check**: flag "restarted from step 0 although a complete checkpoint existed" | verl #7952 is exactly this, and it is silent. Needs a way to know which checkpoints are complete in `run` mode (`--checkpoint-glob`) | next |
+| 3 | **Resume-contract check**: flag "restarted from step 0 although a complete checkpoint existed" | verl #7952 is exactly this, and it is silent. Needs a way to know which checkpoints are complete in `run` mode | **done** (`--checkpoint-glob`; "complete" = same files and sizes as the fault-free run; not yet tried on a real framework's resume; keep-last-N rotation not tracked) |
 | 4 | **GitHub Action + job summary** (markdown table, JUnit) | Where developers already are; one line of YAML to adopt | next |
 | 5 | **Repro generator**: for each failing point, a minimal standalone script plus ready-to-file issue text | Every upstream issue filed with it carries the tool to a framework's own users | next |
 | 6 | **Public scoreboard**: framework x version x verdict, regenerated in CI | The shareable result: "we killed N trainers mid-save, here is who survived". Needs more targets (torchtune, accelerate, DeepSpeed, ms-swift, LLaMA-Factory, Axolotl, Unsloth, ultralytics, Ray Train, Keras) | planned |

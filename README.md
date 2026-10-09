@@ -58,8 +58,30 @@ Two ordinary scripts are included, with no changes to either:
 Options worth knowing: `--result-cmd` (compare with a tolerance), `--max-points` (sample long runs),
 `--jobs` (keep 1 on a shared GPU), `--timeout`. If two fault-free runs of your command already differ
 (unseeded training), the report says so, because divergence verdicts mean nothing then.
-`run` mode cannot tell which checkpoints were complete, so it does not report `LOST_WORK` or the
-"newest ok" column.
+Without `--checkpoint-glob`, `run` mode cannot tell which checkpoints were complete, so it does not report
+`LOST_WORK` or the "newest ok" column.
+
+### Resume contract: did it use the checkpoint that was there?
+
+```bash
+ckpt-chaos run --checkpoint-glob "{out}/ckpt-*" --step-regex "resumed from step (\d+)" \
+    --result-file "{out}/final.pt" --fail-on HARD_FAIL,SILENT_DIVERGENCE,LOST_WORK \
+    -- python train.py --output_dir {out}
+```
+
+The fault-free run records what each matching checkpoint is made of (its files and their sizes; the step is
+the last number in its name). After each crash, a checkpoint that matches its fault-free twin is complete,
+and the resume must start from the newest one. Starting from an older step, or from scratch, is
+`LOST_WORK`, even when nothing raises and the final result is identical. That is the shape of verl #7952,
+where the async save never writes its marker and the resume silently starts over.
+`examples/rotating_json.py --bug` reproduces it: 11 of 16 points are `LOST_WORK` ("newest ok 20, resumed
+from step 0"), every one with exit code 0 from the job itself.
+
+- `--step-regex` is required, and a resume that prints no step counts as step 0 (the run warns when the regex never matches).
+- `--ckpt-ignore-size` compares names only, for checkpoints whose size varies between runs. It cannot see torn files.
+- Checkpoints the fault-free run deletes itself (keep-last-N rotation) are not tracked: keep all of them for this test.
+- `LOST_WORK` is reported but does not fail the run unless you add it to `--fail-on`.
+- Checked so far on the stdlib examples only, not yet on a real framework's resume.
 
 ### The built-in targets
 

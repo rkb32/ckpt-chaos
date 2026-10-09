@@ -34,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--result-file", help="file under {out} whose bytes must match the fault-free run, e.g. '{out}/final.pt'")
     r.add_argument("--result-cmd", help="command whose output must match the fault-free run (use for tolerances)")
     r.add_argument("--step-regex", help="regex with one group that finds the resumed step in the resume output")
+    r.add_argument("--checkpoint-glob", help="glob for your checkpoints, e.g. '{out}/ckpt-*' (step = last number in the name; "
+                   "needs --step-regex). A checkpoint is complete if it has the same files and sizes as in the fault-free "
+                   "run; resuming from an older one, or from scratch, is LOST_WORK. Keep all checkpoints for this test "
+                   "(no keep-last-N rotation)")
+    r.add_argument("--ckpt-ignore-size", action="store_true",
+                   help="with --checkpoint-glob: compare file names only (use when checkpoint sizes vary between runs)")
     r.add_argument("--max-points", type=int, default=40, help="cap on crash points (evenly sampled)")
     r.add_argument("--jobs", type=int, default=1, help="crash points run concurrently (keep 1 on a shared GPU)")
     r.add_argument("--timeout", type=int, default=600, help="seconds per command")
@@ -102,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
     from .runner import print_table
 
     rows = run_byo(command, _split(a.resume_cmd) if a.resume_cmd else None, a.work.resolve(), jobs=a.jobs, timeout=a.timeout,
-                   max_points=a.max_points, result_file=a.result_file, result_cmd=a.result_cmd, step_regex=a.step_regex)
+                   max_points=a.max_points, result_file=a.result_file, result_cmd=a.result_cmd, step_regex=a.step_regex,
+                   checkpoint_glob=a.checkpoint_glob, ignore_size=a.ckpt_ignore_size)
     print_table(rows)
     return _exit_code(rows, a.fail_on)
 

@@ -8,6 +8,7 @@ directory, and the outcome is judged.
 """
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import os
@@ -58,6 +59,36 @@ def _result(out: Path, result_file: str | None, result_cmd: str | None, cwd: str
     return None
 
 
+Snapshot = dict[str, tuple[int, dict[str, int]]]  # checkpoint name -> (step, {file under it: size in bytes})
+
+
+def _signature(p: Path) -> dict[str, int]:
+    if p.is_file():
+        return {".": p.stat().st_size}
+    return {str(q.relative_to(p)): q.stat().st_size for q in p.rglob("*") if q.is_file()}
+
+
+def _snapshot(pattern: str, out: Path) -> Snapshot:
+    """Every checkpoint matching the glob and what it is made of. The step is the last integer in its name."""
+    base = glob.escape(str(out))
+    pat = pattern.replace("{out}", base) if "{out}" in pattern else base + os.sep + pattern
+    snap: Snapshot = {}
+    for hit in glob.glob(pat):
+        numbers = re.findall(r"\d+", Path(hit).name)
+        if numbers:
+            snap[Path(hit).name] = (int(numbers[-1]), _signature(Path(hit)))
+    return snap
+
+
+def _newest_complete(ref: Snapshot, got: Snapshot, ignore_size: bool = False) -> int:
+    """Highest step whose checkpoint looks exactly like the fault-free run's (same files, same sizes)."""
+    best = 0
+    for name, (step, sig) in ref.items():
+        if name in got and (set(got[name][1]) == set(sig) if ignore_size else got[name][1] == sig):
+            best = max(best, step)
+    return best
+
+
 def _select(events: list, max_points: int, modes: tuple[str, ...]) -> list[tuple[int, str]]:
     points = [(n, "before") for n, *_ in events]
     if "torn" in modes:
@@ -70,14 +101,19 @@ def _select(events: list, max_points: int, modes: tuple[str, ...]) -> list[tuple
 
 def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int = 1, timeout: int = 600,
             max_points: int = 40, result_file: str | None = None, result_cmd: str | None = None,
-            step_regex: str | None = None, modes: tuple[str, ...] = ("before", "torn")) -> list[Row]:
+            step_regex: str | None = None, modes: tuple[str, ...] = ("before", "torn"),
+            checkpoint_glob: str | None = None, ignore_size: bool = False) -> list[Row]:
     if not any("{out}" in a for a in train):
         raise SystemExit("put {out} in your command where it takes its output / checkpoint directory, "
                          "for example: -- python train.py --output_dir {out}")
+    if checkpoint_glob and not step_regex:
+        raise SystemExit("--checkpoint-glob needs --step-regex: to say whether the resume used the newest complete "
+                         "checkpoint, the harness must read the step the resume started from")
     cwd = os.getcwd()
     work.mkdir(parents=True, exist_ok=True)
     resume = resume or train
     step_re = re.compile(step_regex) if step_regex else None
+    unmatched: list[int] = []
 
     def armed(wd: Path, out: Path, crash=None, mode="before") -> dict:
         extra = {"CKPT_CHAOS_WATCH": str(out), "CKPT_CHAOS_LOG": str(wd / "events.log"), "CKPT_CHAOS_TORN_PYTHON": "1"}
@@ -96,7 +132,16 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
     if not events:
         raise SystemExit("the command made no file changes under {out}. Does it write its checkpoints there?")
     ref_result = _result(ref_out, result_file, result_cmd, cwd, timeout)
-    plan = {n: (n, kind, name, tornable) for n, kind, name, tornable in events}
+    ref_ckpts: Snapshot = {}
+    if checkpoint_glob:
+        ref_ckpts = _snapshot(checkpoint_glob, ref_out)
+        if not ref_ckpts:
+            raise SystemExit(f"--checkpoint-glob {checkpoint_glob!r} matched no checkpoint (with a number in its name) "
+                             f"after the fault-free run. Checkpoints the run deletes itself, such as keep-last-N rotation, "
+                             f"cannot be tracked: keep them all for this test.")
+        print(f"    contract: {len(ref_ckpts)} checkpoints in the fault-free run, steps "
+              f"{sorted(s for s, _ in ref_ckpts.values())}", flush=True)
+    plan ={n: (n, kind, name, tornable) for n, kind, name, tornable in events}
     points = _select(events, max_points, modes)
     print(f"    {len(events)} file events -> {len(points)} crash points (+1 control), {jobs} at a time", flush=True)
     if ref_result is None:
@@ -128,15 +173,18 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
         rc, _ = _run(_sub(train, out), _env(armed(wd, out, n, mode)), cwd, timeout)
         seen = _events(wd / "events.log.rank0")
         drift = not seen or seen[-1][:3] != plan[n][:3]
+        newest = _newest_complete(ref_ckpts, _snapshot(checkpoint_glob, out), ignore_size) if checkpoint_glob else 0
         rrc, rtext = _run(_sub(resume, out), _env(), cwd, timeout)  # the resume run is not armed
         raised = None if rrc == 0 else ("Timeout" if rtext == "TIMEOUT" else f"ExitCode{rrc}")
         step = None
         if step_re and raised is None:
             m = step_re.search(rtext)
             step = int(m.group(1)) if m else None
+            if m is None:
+                unmatched.append(order)
         diff = judge_result(out) if raised is None else None
         label = f"#{n} {plan[n][1]}:{plan[n][2]} [{mode}]"
-        return record(order, wd, label, rc, rc != 0, drift, ResumeOutcome(raised, step, 0, diff))
+        return record(order, wd, label, rc, rc != 0, drift, ResumeOutcome(raised, step, newest, diff))
 
     print("2/3 crashing and resuming ...", flush=True)
     with ThreadPoolExecutor(jobs) as ex:
@@ -144,6 +192,9 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
         for f in futures:
             f.result()
     print("3/3 judging\n", flush=True)
+    if checkpoint_glob and unmatched:
+        print(f"WARNING: --step-regex found no step in the resume output of {len(unmatched)} runs. With "
+              f"--checkpoint-glob a missing step counts as 'resumed from step 0' (LOST_WORK): check the regex.\n", flush=True)
     rows = rejudge(work)
     ctl = next((r for r in rows if r.label.startswith("no crash")), None)
     if ctl is not None and ctl.verdict == "SILENT_DIVERGENCE":
