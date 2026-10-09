@@ -35,6 +35,14 @@ class ArgvFromEnv(unittest.TestCase):
         argv = argv_from_env({"INPUT_COMMAND": "python train.py --out {out}", "INPUT_RESULT_CMD": "echo $(whoami); rm -rf /"})
         self.assertEqual(argv[argv.index("--result-cmd") + 1], "echo $(whoami); rm -rf /")
 
+    def test_two_calls_never_share_a_work_directory(self):
+        base = tempfile.mkdtemp(prefix="ckptchaos_base_")
+        env = {"INPUT_COMMAND": "python x.py --out {out}", "INPUT_WORK_DIR": base}
+        calls = [argv_from_env(env) for _ in range(2)]
+        works = [a[a.index("--work") + 1] for a in calls]
+        self.assertNotEqual(works[0], works[1])
+        self.assertTrue(all(Path(w).parent == Path(base) and Path(w).is_dir() for w in works))
+
     def test_command_is_required(self):
         with self.assertRaises(SystemExit) as cm:
             argv_from_env({"INPUT_COMMAND": "  "})

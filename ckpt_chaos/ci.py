@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from typing import Mapping
 
 from .cli import _split, main
@@ -26,8 +27,9 @@ def argv_from_env(env: Mapping[str, str]) -> list[str]:
             argv += [flag, value]
     if env.get("INPUT_CKPT_IGNORE_SIZE", "").strip().lower() == "true":
         argv.append("--ckpt-ignore-size")
-    if env.get("INPUT_WORK_DIR", "").strip():
-        argv += ["--work", env["INPUT_WORK_DIR"]]
+    if env.get("INPUT_WORK_DIR", "").strip():  # a fresh directory per call: the action may run twice in one job
+        os.makedirs(env["INPUT_WORK_DIR"], exist_ok=True)
+        argv += ["--work", tempfile.mkdtemp(prefix="run-", dir=env["INPUT_WORK_DIR"])]
     if env.get("GITHUB_STEP_SUMMARY", "").strip():
         argv += ["--summary", env["GITHUB_STEP_SUMMARY"]]
     return argv + ["--"] + _split(command)

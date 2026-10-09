@@ -37,6 +37,14 @@ class Byo(unittest.TestCase):
         self.assertNotIn("SILENT_DIVERGENCE", out)
         self.assertIn("PASS", out)
 
+    def test_reusing_a_work_directory_is_refused(self):
+        work = Path(tempfile.mkdtemp(prefix="ckptchaos_reuse_")) / "work"
+        (work / "pt_001").mkdir(parents=True)
+        p = subprocess.run([sys.executable, "-m", "ckpt_chaos", "run", "--work", str(work), "--", sys.executable, str(SCRIPT),
+                            "--out", "{out}"], cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("already holds", p.stdout + p.stderr)
+
     def test_command_without_out_placeholder_is_refused_with_a_hint(self):
         p = subprocess.run([sys.executable, "-m", "ckpt_chaos", "run", "--", sys.executable, "-c", "pass"],
                            cwd=ROOT, capture_output=True, text=True, timeout=60)

@@ -110,6 +110,9 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
         raise SystemExit("--checkpoint-glob needs --step-regex: to say whether the resume used the newest complete "
                          "checkpoint, the harness must read the step the resume started from")
     cwd = os.getcwd()
+    if (work / "reference").exists() or any(work.glob("pt_*")):  # leftovers would be resumed from and skew every verdict
+        raise SystemExit(f"{work} already holds the results of an earlier run. Pass a new --work directory "
+                         f"(the default creates a fresh one every time).")
     work.mkdir(parents=True, exist_ok=True)
     resume = resume or train
     step_re = re.compile(step_regex) if step_regex else None
