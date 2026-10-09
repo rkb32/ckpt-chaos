@@ -83,6 +83,33 @@ from step 0"), every one with exit code 0 from the job itself.
 - `LOST_WORK` is reported but does not fail the run unless you add it to `--fail-on`.
 - Checked so far on the stdlib examples only, not yet on a real framework's resume.
 
+## Use it in CI (GitHub Action)
+
+```yaml
+- uses: actions/checkout@v4
+- uses: actions/setup-python@v5
+  with: { python-version: "3.12" }
+- run: pip install -r requirements.txt      # your training dependencies
+- uses: rkb32/ckpt-chaos@v0.1.2
+  with:
+    command: python train.py --output_dir {out}
+    checkpoint-glob: "{out}/ckpt-*"
+    step-regex: 'resumed from step (\d+)'
+    result-file: "{out}/final.pt"
+    fail-on: HARD_FAIL,SILENT_DIVERGENCE,LOST_WORK
+```
+
+The job fails if any crash point breaks the resume, and the run page gets a summary: verdict counts, a table
+of the failing crash points (with the newest complete checkpoint and the step the resume actually used), the
+full table in a collapsible block, and the command to reproduce it locally. The inputs are the `run` options
+(`resume-command`, `result-cmd`, `max-points`, `jobs`, `timeout`, `ckpt-ignore-size`); `package` picks the pip
+requirement and `python-version` runs `setup-python` for you. Each crash point's `result.json` and event log are
+uploaded as an artifact (`upload-results: false` turns that off; set `artifact-name` when you use a matrix, since
+artifact names must be unique per run). Outside Actions, `ckpt-chaos run --summary FILE` appends the same Markdown.
+
+On a CI machine your training command runs once per crash point, so use a small config (a few steps, a tiny
+model) and `max-points` to bound the time. The action writes only inside its own work directory under `runner.temp`.
+
 ### The built-in targets
 
 ```bash

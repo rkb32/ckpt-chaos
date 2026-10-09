@@ -1,0 +1,94 @@
+name: ckpt-chaos
+description: Kill your training job at every checkpoint-write boundary, resume it, and fail the build if the resume breaks.
+author: rkb32
+branding:
+  icon: alert-triangle
+  color: red
+
+inputs:
+  command:
+    description: "Your training command, with {out} where it takes its output / checkpoint directory (for example: python train.py --output_dir {out})."
+    required: true
+  resume-command:
+    description: "Command that resumes the job. Default: the same command."
+    default: ""
+  checkpoint-glob:
+    description: "Glob for your checkpoints, for example {out}/ckpt-*. Enables the resume-contract check (needs step-regex)."
+    default: ""
+  step-regex:
+    description: "Regex with one group that finds the step the resume started from in its output, for example: resumed from step (\\d+)"
+    default: ""
+  result-file:
+    description: "File under {out} whose bytes must match the fault-free run, for example {out}/final.pt."
+    default: ""
+  result-cmd:
+    description: "Command whose output must match the fault-free run (use it to compare with a tolerance)."
+    default: ""
+  fail-on:
+    description: "Comma-separated verdicts that fail the build. Default: HARD_FAIL,SILENT_DIVERGENCE,CONTROL_FAIL."
+    default: ""
+  max-points:
+    description: "Cap on crash points (evenly sampled). Default 40."
+    default: ""
+  jobs:
+    description: "Crash points run concurrently. Default 1; keep 1 on a shared GPU."
+    default: ""
+  timeout:
+    description: "Seconds allowed per command. Default 600."
+    default: ""
+  ckpt-ignore-size:
+    description: "Set to true to compare checkpoint file names only, for checkpoints whose size varies between runs."
+    default: "false"
+  package:
+    description: "pip requirement to install. Use . to test the checked-out source."
+    default: "ckpt-chaos>=0.1.2"
+  python-version:
+    description: "If set, run actions/setup-python with this version first. Otherwise python on PATH is used."
+    default: ""
+  upload-results:
+    description: "Upload each crash point's result.json and event log as an artifact."
+    default: "true"
+  artifact-name:
+    description: "Name of that artifact. Artifact names must be unique per workflow run, so set this when you use a matrix."
+    default: "ckpt-chaos-results"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      if: inputs.python-version != ''
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install ckpt-chaos
+      shell: bash
+      env:
+        PACKAGE: ${{ inputs.package }}
+      run: python -m pip install --quiet "$PACKAGE"
+
+    - name: Crash-test the checkpoint save
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_RESUME_COMMAND: ${{ inputs.resume-command }}
+        INPUT_CHECKPOINT_GLOB: ${{ inputs.checkpoint-glob }}
+        INPUT_STEP_REGEX: ${{ inputs.step-regex }}
+        INPUT_RESULT_FILE: ${{ inputs.result-file }}
+        INPUT_RESULT_CMD: ${{ inputs.result-cmd }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_MAX_POINTS: ${{ inputs.max-points }}
+        INPUT_JOBS: ${{ inputs.jobs }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        INPUT_CKPT_IGNORE_SIZE: ${{ inputs.ckpt-ignore-size }}
+        INPUT_WORK_DIR: ${{ runner.temp }}/ckpt-chaos-runs
+      run: python -m ckpt_chaos.ci
+
+    - name: Upload results
+      if: always() && inputs.upload-results == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ runner.temp }}/ckpt-chaos-runs/**/result.json
+          ${{ runner.temp }}/ckpt-chaos-runs/**/events.log*
+        if-no-files-found: ignore

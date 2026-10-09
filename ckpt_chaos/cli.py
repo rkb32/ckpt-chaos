@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -17,12 +18,39 @@ DEFAULT_FAIL_ON = "HARD_FAIL,SILENT_DIVERGENCE,CONTROL_FAIL"
 
 
 def _split(cmd: str) -> list[str]:
-    return shlex.split(cmd, posix=os.name != "nt")
+    if os.name != "nt":
+        return shlex.split(cmd)
+    # posix=False keeps backslashes in paths but also keeps the quote characters, which would reach the program
+    tokens = shlex.split(cmd, posix=False)
+    return [(t[1:-1] if len(t) >= 2 and t[0] == t[-1] == "'" else t).replace('"', "") for t in tokens]
+
+
+def _verdicts(fail_on: str) -> set[str]:
+    return {v.strip().upper() for v in fail_on.split(",") if v.strip()}
 
 
 def _exit_code(rows, fail_on: str) -> int:
-    bad = {v.strip().upper() for v in fail_on.split(",") if v.strip()}
+    bad = _verdicts(fail_on)
     return 1 if any(r.verdict in bad for r in rows) else 0
+
+
+def _invocation(argv: list[str]) -> str:
+    """The command line without the machine-specific --summary / --work, for the 'reproduce locally' block."""
+    kept, skip = [], False
+    for a in argv:
+        if skip:
+            skip = False
+        elif a in ("--summary", "--work"):
+            skip = True
+        else:
+            kept.append(a)
+    return "ckpt-chaos " + (shlex.join(kept) if os.name != "nt" else subprocess.list2cmdline(kept))
+
+
+def _append(path: Path, text: str) -> None:
+    """Append, because $GITHUB_STEP_SUMMARY is shared by every step of the job."""
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(text)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--timeout", type=int, default=600, help="seconds per command")
     r.add_argument("--fail-on", default=DEFAULT_FAIL_ON, help=f"verdicts that give a non-zero exit (default {DEFAULT_FAIL_ON})")
     r.add_argument("--work", type=Path, default=Path("ckpt-chaos-runs") / time.strftime("%Y%m%d-%H%M%S"))
+    r.add_argument("--summary", type=Path, metavar="FILE",
+                   help="append a Markdown report to FILE (in GitHub Actions: $GITHUB_STEP_SUMMARY)")
     r.add_argument("command", nargs=argparse.REMAINDER, help="-- followed by your training command")
 
     b = sub.add_parser("bench", help="run a built-in target: hf_trainer, lightning_trainer or loop_ddp")
@@ -107,10 +137,22 @@ def main(argv: list[str] | None = None) -> int:
     from .byo import run_byo
     from .runner import print_table
 
-    rows = run_byo(command, _split(a.resume_cmd) if a.resume_cmd else None, a.work.resolve(), jobs=a.jobs, timeout=a.timeout,
-                   max_points=a.max_points, result_file=a.result_file, result_cmd=a.result_cmd, step_regex=a.step_regex,
-                   checkpoint_glob=a.checkpoint_glob, ignore_size=a.ckpt_ignore_size)
+    try:
+        rows = run_byo(command, _split(a.resume_cmd) if a.resume_cmd else None, a.work.resolve(), jobs=a.jobs, timeout=a.timeout,
+                       max_points=a.max_points, result_file=a.result_file, result_cmd=a.result_cmd, step_regex=a.step_regex,
+                       checkpoint_glob=a.checkpoint_glob, ignore_size=a.ckpt_ignore_size)
+    except SystemExit as e:
+        if a.summary and isinstance(e.code, str):  # say why the job never started, in the place people look
+            from .report import error_markdown
+
+            _append(a.summary, error_markdown(e.code))
+        raise
     print_table(rows)
+    if a.summary:
+        from .report import markdown
+
+        _append(a.summary, markdown(rows, fail_on=_verdicts(a.fail_on),
+                                    invocation=_invocation(sys.argv[1:] if argv is None else argv)))
     return _exit_code(rows, a.fail_on)
 
 

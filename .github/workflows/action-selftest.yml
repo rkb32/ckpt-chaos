@@ -1,0 +1,49 @@
+name: action-selftest
+# Runs the action from this checkout against the two example jobs: one must pass, one must fail.
+on:
+  push:
+  pull_request:
+
+jobs:
+  selftest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Job that resumes from its newest checkpoint (must pass)
+        uses: ./
+        with:
+          package: .
+          python-version: "3.12"
+          command: python examples/rotating_json.py --out {out}
+          checkpoint-glob: "{out}/ckpt-*.json"
+          step-regex: 'resumed from step (\d+)'
+          result-file: "{out}/result.json"
+          fail-on: HARD_FAIL,SILENT_DIVERGENCE,LOST_WORK,CONTROL_FAIL
+          jobs: "2"
+          artifact-name: selftest-good-${{ matrix.os }}
+
+      - name: Job that silently starts over (must fail)
+        id: bad
+        continue-on-error: true
+        uses: ./
+        with:
+          package: .
+          command: python examples/rotating_json.py --out {out} --bug
+          checkpoint-glob: "{out}/ckpt-*.json"
+          step-regex: 'resumed from step (\d+)'
+          result-file: "{out}/result.json"
+          fail-on: HARD_FAIL,SILENT_DIVERGENCE,LOST_WORK,CONTROL_FAIL
+          jobs: "2"
+          artifact-name: selftest-bug-${{ matrix.os }}
+
+      - name: The buggy job must have been caught
+        if: steps.bad.outcome != 'failure'
+        shell: bash
+        run: |
+          echo "the action did not fail on a job that silently restarts from step 0"
+          exit 1
