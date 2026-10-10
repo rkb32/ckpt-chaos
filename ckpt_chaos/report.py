@@ -1,6 +1,7 @@
 """Markdown for a CI job summary (`$GITHUB_STEP_SUMMARY`) built from the verdict rows."""
 from __future__ import annotations
 
+import re
 from collections import Counter
 
 ORDER = ["HARD_FAIL", "SILENT_DIVERGENCE", "LOST_WORK", "CONTROL_FAIL", "PASS"]
@@ -66,3 +67,40 @@ def markdown(rows, *, fail_on: set[str], invocation: str | None = None) -> str:
 
 def error_markdown(message: str) -> str:
     return "## ckpt-chaos: could not run\n\n```\n" + message.strip()[-2000:] + "\n```\n"
+
+
+_XML_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
+
+
+def _xml_safe(text: str) -> str:
+    """XML 1.0 cannot carry most control characters, even escaped; a file name or an error message can."""
+    return _XML_ILLEGAL.sub("?", text)
+
+
+def junit(rows, *, fail_on: set[str]) -> str:
+    """JUnit XML: one test case per crash point, a failure where the verdict is in fail_on. CI systems read this."""
+    from xml.sax.saxutils import escape, quoteattr
+
+    failures = sum(1 for r in rows if r.verdict in fail_on)
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+             f'<testsuite name="ckpt-chaos" tests="{len(rows)}" failures="{failures}">']
+    for r in rows:
+        name = quoteattr(_xml_safe(r.label))
+        if r.verdict in fail_on:
+            message = quoteattr(_xml_safe(f"{r.verdict}: {_result(r)}"))
+            lines.append(f'  <testcase name={name} classname="ckpt-chaos">'
+                         f'<failure message={message}>{escape(MEANING.get(r.verdict, r.verdict))}</failure></testcase>')
+        else:
+            lines.append(f'  <testcase name={name} classname="ckpt-chaos"/>')
+    lines.append("</testsuite>")
+    return "\n".join(lines) + "\n"
+
+
+def junit_error(message: str) -> str:
+    """A one-case JUnit file for a run that never got judged, so CI shows the reason instead of a stale or missing file."""
+    from xml.sax.saxutils import escape
+
+    text = escape(_xml_safe(message.strip()[-2000:]))
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="ckpt-chaos" tests="1" errors="1">\n'
+            f'  <testcase name="ckpt-chaos could not run" classname="ckpt-chaos"><error message="could not run">{text}'
+            '</error></testcase>\n</testsuite>\n')

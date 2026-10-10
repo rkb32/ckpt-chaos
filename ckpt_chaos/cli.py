@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 DEFAULT_FAIL_ON = "HARD_FAIL,SILENT_DIVERGENCE,CONTROL_FAIL"
+VALID_MODES = ("before", "torn", "term")  # same as byo.MODES; kept here so --help and errors need no heavy import
 
 
 def _split(cmd: str) -> list[str]:
@@ -35,12 +36,12 @@ def _exit_code(rows, fail_on: str) -> int:
 
 
 def _invocation(argv: list[str]) -> str:
-    """The command line without the machine-specific --summary / --work, for the 'reproduce locally' block."""
+    """The command line without the machine-specific --summary / --work / --junit, for the 'reproduce locally' block."""
     kept, skip = [], False
     for a in argv:
         if skip:
             skip = False
-        elif a in ("--summary", "--work"):
+        elif a in ("--summary", "--work", "--junit"):
             skip = True
         else:
             kept.append(a)
@@ -75,6 +76,10 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--work", type=Path, default=Path("ckpt-chaos-runs") / time.strftime("%Y%m%d-%H%M%S"))
     r.add_argument("--summary", type=Path, metavar="FILE",
                    help="append a Markdown report to FILE (in GitHub Actions: $GITHUB_STEP_SUMMARY)")
+    r.add_argument("--junit", type=Path, metavar="FILE", help="write the crash points as JUnit XML to FILE")
+    r.add_argument("--modes", default="before,torn", help="comma-separated crash modes: before, torn, term (SIGTERM, "
+                   "then a kill after --grace seconds). --max-points is split between them")
+    r.add_argument("--grace", type=float, default=5.0, help="term mode: seconds between SIGTERM and the kill (default 5)")
     r.add_argument("command", nargs=argparse.REMAINDER, help="-- followed by your training command")
 
     b = sub.add_parser("bench", help="run a built-in target: hf_trainer, lightning_trainer or loop_ddp")
@@ -93,6 +98,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("run_dir", type=Path)
     p.add_argument("--dest", type=Path, help="where to write (default: RUN_DIR/repro)")
     p.add_argument("--limit", type=int, default=3, help="how many failing crash points to write (one of each verdict first)")
+
+    s = sub.add_parser("scoreboard", help="one Markdown table of verdict counts across run folders")
+    s.add_argument("runs", nargs="+", help="run folders, each optionally as NAME=DIR")
+    s.add_argument("--out", type=Path, help="write the table to this file (default: print it)")
 
     t = sub.add_parser("roundtrip", help="save a checkpoint and load it straight back N times on a filesystem")
     t.add_argument("--dir", type=Path, required=True, help="directory on the filesystem to test")
@@ -113,6 +122,25 @@ def main(argv: list[str] | None = None) -> int:
         for msg, count in errors.most_common(5):
             print(f"    {count} x {msg}")
         return 1 if failed else 0
+
+    if a.cmd == "scoreboard":
+        from .scoreboard import markdown, summarize
+
+        rows = []
+        for spec in a.runs:
+            name, _, path = spec.partition("=") if "=" in spec and not Path(spec).exists() else (None, None, spec)
+            run_dir = Path(path or spec).resolve()
+            if not run_dir.is_dir():
+                ap.error(f"not a run folder: {run_dir}")
+            rows.append(summarize(run_dir, name))
+        text = markdown(rows)
+        if a.out:
+            a.out.parent.mkdir(parents=True, exist_ok=True)
+            a.out.write_text(text, encoding="utf-8")
+            print(f"wrote {a.out}")
+        else:
+            print(text, end="")
+        return 0
 
     if a.cmd == "repro":
         from .repro import write
@@ -151,18 +179,32 @@ def main(argv: list[str] | None = None) -> int:
     command = a.command[1:] if a.command[:1] == ["--"] else a.command
     if not command:
         ap.error("give your training command after --, for example: -- python train.py --output_dir {out}")
+    modes = tuple(m.strip().lower() for m in a.modes.split(",") if m.strip())
+    bad = [m for m in modes if m not in VALID_MODES]
+    if bad or not modes:  # a typo must not turn into "0 crash points, PASSED"
+        ap.error(f"--modes takes one or more of {', '.join(VALID_MODES)}; got {a.modes!r}")
+    if a.max_points < 1:
+        ap.error("--max-points must be at least 1")
+    if not a.grace > 0:
+        ap.error("--grace must be a positive number of seconds")
     from .byo import run_byo
     from .runner import print_table
 
     try:
         rows = run_byo(command, _split(a.resume_cmd) if a.resume_cmd else None, a.work.resolve(), jobs=a.jobs, timeout=a.timeout,
                        max_points=a.max_points, result_file=a.result_file, result_cmd=a.result_cmd, step_regex=a.step_regex,
-                       checkpoint_glob=a.checkpoint_glob, ignore_size=a.ckpt_ignore_size)
-    except SystemExit as e:
-        if a.summary and isinstance(e.code, str):  # say why the job never started, in the place people look
-            from .report import error_markdown
+                       checkpoint_glob=a.checkpoint_glob, ignore_size=a.ckpt_ignore_size, modes=modes, grace=a.grace)
+    except (SystemExit, Exception) as e:
+        # say why the job never got judged, in the places CI looks: the summary and the JUnit file
+        message = e.code if isinstance(e, SystemExit) else f"{type(e).__name__}: {e}"
+        if isinstance(message, str):
+            from .report import error_markdown, junit_error
 
-            _append(a.summary, error_markdown(e.code))
+            if a.summary:
+                _append(a.summary, error_markdown(message))
+            if a.junit:
+                a.junit.parent.mkdir(parents=True, exist_ok=True)
+                a.junit.write_text(junit_error(message), encoding="utf-8")
         raise
     print_table(rows)
     if a.summary:
@@ -170,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
 
         _append(a.summary, markdown(rows, fail_on=_verdicts(a.fail_on),
                                     invocation=_invocation(sys.argv[1:] if argv is None else argv)))
+    if a.junit:
+        from .report import junit
+
+        a.junit.parent.mkdir(parents=True, exist_ok=True)
+        a.junit.write_text(junit(rows, fail_on=_verdicts(a.fail_on)), encoding="utf-8")
     return _exit_code(rows, a.fail_on)
 
 

@@ -8,9 +8,11 @@ save. Two sources of events:
   * Calls to the native writers torch.save and safetensors' save_file, which
     write files from C/Rust and so raise no audit events.
 
-Each event can be crashed in mode "before" (the file never appears) and, for
-native writers, mode "torn" (the file appears, cut to half its size). Events
-are logged to `log_path` so a report can name the exact boundary.
+Each event can be crashed in mode "before" (the file never appears), mode
+"torn" (the file appears, cut to half its size; native writers, and Python
+open() with torn_python) or mode "term" (the job gets SIGTERM and runs on until
+it exits or the grace period CKPT_CHAOS_GRACE_S runs out, as in a preemption).
+Events are logged to `log_path` so a report can name the exact boundary.
 
 With lazy_native=True (used for unmodified third-party scripts) the native
 writers are patched right after torch / safetensors are imported, so scripts
@@ -51,10 +53,32 @@ def _event(kind: str, path, tornable: bool) -> bool:
         line = f"{n}\t{kind}\t{os.path.basename(os.fspath(path))}\t{int(tornable)}\n"
         os.write(_state["fd"], line.encode())
     if _state["crash_at"] == n:
+        if _state["mode"] == "term":
+            _terminate()
+            return False
         if _state["mode"] == "torn" and tornable:
             return True
         os._exit(137)  # no cleanup, no flush: what a kill leaves behind
     return False
+
+
+def _terminate() -> None:
+    """A preemption: SIGTERM now, then SIGKILL when the grace period runs out.
+
+    A job with no SIGTERM handler dies at once (the default action). A job with a handler keeps running
+    until it exits or the grace period (CKPT_CHAOS_GRACE_S, default 5 s) is over, and then it is killed.
+    """
+    import signal
+    import threading
+
+    try:  # parsed here, inside the job: a bad value must not raise into the user's code
+        grace = float(os.environ.get("CKPT_CHAOS_GRACE_S", "5"))
+    except ValueError:
+        grace = 5.0
+    signal.raise_signal(signal.SIGTERM)
+    timer = threading.Timer(grace if grace > 0 else 5.0, os._exit, [137])
+    timer.daemon = True
+    timer.start()
 
 
 def _is_mutation(event: str, args: tuple) -> bool:

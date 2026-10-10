@@ -13,7 +13,8 @@ from .cli import _split, main
 
 VALUE_FLAGS = [("CHECKPOINT_GLOB", "--checkpoint-glob"), ("STEP_REGEX", "--step-regex"), ("RESULT_FILE", "--result-file"),
                ("RESULT_CMD", "--result-cmd"), ("RESUME_COMMAND", "--resume-cmd"), ("MAX_POINTS", "--max-points"),
-               ("JOBS", "--jobs"), ("TIMEOUT", "--timeout"), ("FAIL_ON", "--fail-on")]
+               ("JOBS", "--jobs"), ("TIMEOUT", "--timeout"), ("FAIL_ON", "--fail-on"), ("MODES", "--modes"),
+               ("GRACE", "--grace"), ("JUNIT_FILE", "--junit")]
 
 
 def argv_from_env(env: Mapping[str, str]) -> list[str]:

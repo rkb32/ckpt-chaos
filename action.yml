@@ -39,9 +39,18 @@ inputs:
   ckpt-ignore-size:
     description: "Set to true to compare checkpoint file names only, for checkpoints whose size varies between runs."
     default: "false"
+  modes:
+    description: "Comma-separated crash modes: before, torn, term (SIGTERM, then a kill after the grace period). Default: before,torn."
+    default: ""
+  grace:
+    description: "term mode: seconds between SIGTERM and the kill. Default 5."
+    default: ""
+  junit-file:
+    description: "Also write the crash points as JUnit XML to this path, for a test-report action to pick up."
+    default: ""
   package:
     description: "pip requirement to install. Use . to test the checked-out source."
-    default: "ckpt-chaos>=0.1.2"
+    default: "ckpt-chaos>=0.1.3"
   python-version:
     description: "If set, run actions/setup-python with this version first. Otherwise python on PATH is used."
     default: ""
@@ -80,6 +89,9 @@ runs:
         INPUT_JOBS: ${{ inputs.jobs }}
         INPUT_TIMEOUT: ${{ inputs.timeout }}
         INPUT_CKPT_IGNORE_SIZE: ${{ inputs.ckpt-ignore-size }}
+        INPUT_MODES: ${{ inputs.modes }}
+        INPUT_GRACE: ${{ inputs.grace }}
+        INPUT_JUNIT_FILE: ${{ inputs.junit-file }}
         INPUT_WORK_DIR: ${{ runner.temp }}/ckpt-chaos-runs
       run: python -m ckpt_chaos.ci
 

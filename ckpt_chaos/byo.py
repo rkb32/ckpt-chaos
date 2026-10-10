@@ -104,20 +104,41 @@ def _newest_complete(ref: Snapshot, got: Snapshot, ignore_size: bool = False) ->
     return best
 
 
+MODES = ("before", "torn", "term")
+
+
+def _even(items: list, k: int) -> list:
+    """k items spread evenly over the list (all of them if it is short enough)."""
+    if k <= 0:
+        return []
+    if len(items) <= k:
+        return items
+    stride = len(items) / k
+    return [items[int(i * stride)] for i in range(k)]
+
+
 def _select(events: list, max_points: int, modes: tuple[str, ...]) -> list[tuple[int, str]]:
-    points = [(n, "before") for n, *_ in events]
-    if "torn" in modes:
-        points += [(n, "torn") for n, _, _, tornable in events if tornable]
-    if len(points) > max_points:
-        stride = len(points) / max_points
-        points = [points[int(i * stride)] for i in range(max_points)]
+    """Crash points for each mode. The budget is split between the modes, so every mode is sampled across the
+    whole save, and before / term (which share a pool) land on the same file events."""
+    unknown = [m for m in modes if m not in MODES]
+    if unknown or not modes:
+        raise SystemExit(f"crash modes must be one or more of {', '.join(MODES)}; got {list(modes) or 'none'}")
+    if max_points < 1:
+        raise SystemExit("--max-points must be at least 1")
+    share, extra = divmod(max_points, len(modes))
+    points: list[tuple[int, str]] = []
+    for i, mode in enumerate(modes):
+        pool = [n for n, _, _, tornable in events if tornable] if mode == "torn" else [n for n, *_ in events]
+        points += [(n, mode) for n in _even(pool, share + (1 if i < extra else 0))]
     return points
 
 
 def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int = 1, timeout: int = 600,
             max_points: int = 40, result_file: str | None = None, result_cmd: str | None = None,
             step_regex: str | None = None, modes: tuple[str, ...] = ("before", "torn"),
-            checkpoint_glob: str | None = None, ignore_size: bool = False) -> list[Row]:
+            checkpoint_glob: str | None = None, ignore_size: bool = False, grace: float = 5.0) -> list[Row]:
+    if not grace > 0:
+        raise SystemExit("--grace must be a positive number of seconds")
     if not any("{out}" in a for a in train):
         raise SystemExit("put {out} in your command where it takes its output / checkpoint directory, "
                          "for example: -- python train.py --output_dir {out}")
@@ -136,7 +157,7 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
     def armed(wd: Path, out: Path, crash=None, mode="before") -> dict:
         extra = {"CKPT_CHAOS_WATCH": str(out), "CKPT_CHAOS_LOG": str(wd / "events.log"), "CKPT_CHAOS_TORN_PYTHON": "1"}
         if crash:
-            extra.update(CKPT_CHAOS_CRASH_AT=str(crash), CKPT_CHAOS_MODE=mode)
+            extra.update(CKPT_CHAOS_CRASH_AT=str(crash), CKPT_CHAOS_MODE=mode, CKPT_CHAOS_GRACE_S=str(grace))
         return extra
 
     print("1/3 fault-free reference run (records every file event under {out}) ...", flush=True)
@@ -163,10 +184,14 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
     # what `ckpt-chaos repro` needs to rebuild one crash point on its own
     (work / "meta.json").write_text(json.dumps({
         "train": train, "resume": resume, "step_regex": step_regex, "checkpoint_glob": checkpoint_glob,
-        "ignore_size": ignore_size, "result_file": result_file, "result_cmd": result_cmd, "work": str(work),
+        "ignore_size": ignore_size, "result_file": result_file, "result_cmd": result_cmd, "work": str(work), "cwd": cwd,
+        "modes": list(modes), "grace": grace,
         "reference_steps": sorted(s for s, _ in ref_ckpts.values()) if ref_ckpts else None, "versions": _versions(),
     }, indent=1), encoding="utf-8")
     points = _select(events, max_points, modes)
+    if not points:  # e.g. only "torn" on a job with no writer that can be torn: say so instead of passing empty-handed
+        raise SystemExit(f"no crash points for modes {list(modes)}: the job's {len(events)} file events offer none "
+                         f"(torn needs torch.save, safetensors or Python open() writes)")
     print(f"    {len(events)} file events -> {len(points)} crash points (+1 control), {jobs} at a time", flush=True)
     if ref_result is None:
         print("    note: no --result-file / --result-cmd, so silent divergence cannot be detected", flush=True)
@@ -198,7 +223,8 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
         out = wd / "out"
         rc, _ = _run(_sub(train, out), _env(armed(wd, out, n, mode)), cwd, timeout)
         seen = _events(wd / "events.log.rank0")
-        drift = not seen or seen[-1][:3] != plan[n][:3]
+        # the crash event must be in the log; after a SIGTERM the job may log more events before it is killed
+        drift = not any(e[0] == n and e[:3] == plan[n][:3] for e in seen)
         newest = _newest_complete(ref_ckpts, _snapshot(checkpoint_glob, out), ignore_size) if checkpoint_glob else 0
         rrc, rtext = _run(_sub(resume, out), _env(), cwd, timeout)  # the resume run is not armed
         raised = None if rrc == 0 else ("Timeout" if rtext == "TIMEOUT" else f"ExitCode{rrc}")

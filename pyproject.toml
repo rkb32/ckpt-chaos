@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ckpt-chaos"
-version = "0.1.2"
+version = "0.1.3"
 description = "Crash-consistency testing for ML training checkpoints: kill a save at every file boundary, resume, classify the outcome."
 readme = "README.md"
 requires-python = ">=3.9"
