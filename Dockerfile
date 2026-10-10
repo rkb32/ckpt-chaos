@@ -3,7 +3,7 @@
 #   docker build -t ckpt-chaos --build-arg EXTRAS="transformers accelerate" .
 #   docker run --rm ckpt-chaos loop_ddp --ranks 2 --strategy tmp_rename --flake 25
 #   docker run --rm -v ckptchaos-runs:/app/runs ckpt-chaos ...      # runs/ on a volume instead of overlayfs
-FROM python:3.12-slim
+FROM python:3.14-slim
 WORKDIR /app
 ARG EXTRAS=""
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
