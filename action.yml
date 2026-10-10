@@ -55,7 +55,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v7
       if: inputs.python-version != ''
       with:
         python-version: ${{ inputs.python-version }}
