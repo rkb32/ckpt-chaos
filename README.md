@@ -103,7 +103,7 @@ ckpt-chaos internals, so run it with the same ckpt-chaos version as the run (the
 - uses: actions/setup-python@v5
   with: { python-version: "3.12" }
 - run: pip install -r requirements.txt      # your training dependencies
-- uses: rkb32/ckpt-chaos@v0.1.2
+- uses: rkb32/ckpt-chaos@v0.1.3
   with:
     command: python train.py --output_dir {out}
     checkpoint-glob: "{out}/ckpt-*"
