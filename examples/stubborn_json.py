@@ -4,7 +4,7 @@ It saves state.json every 5 steps (the same non-atomic save as naive_json.py) an
 With `--modes term` ckpt-chaos sends it SIGTERM at each file event. It ignores the signal, keeps running,
 and gets SIGKILLed when the grace period runs out (CKPT_CHAOS_GRACE_S, default 5 s).
 
-    CKPT_CHAOS_GRACE_S=1 ckpt-chaos run --modes term --checkpoint-glob "{out}/state.json" \\
+    CKPT_CHAOS_GRACE_S=1 ckpt-chaos run --modes term --result-file "{out}/result.json" \\
         --step-regex "resumed from step (\\d+)" -- python examples/stubborn_json.py --out {out}
 """
 import argparse
