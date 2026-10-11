@@ -46,6 +46,14 @@ class DataOrder(unittest.TestCase):
         self.assertNotIn("HARD_FAIL", p.stdout)  # both versions finish: only the result tells them apart
 
 
+try:
+    import h5py  # noqa: F401
+    HAVE_H5PY = True
+except ImportError:
+    HAVE_H5PY = False
+
+
+@unittest.skipUnless(HAVE_H5PY, "h5py is not installed (no wheel for this Python yet in CI)")
 class H5py(unittest.TestCase):
     def test_a_torn_hdf5_file_breaks_the_resume(self):
         p = run_cli(["examples/h5py_json_ckpt.py"], "--result-file", "{out}/result.json",

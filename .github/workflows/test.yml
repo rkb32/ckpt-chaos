@@ -14,5 +14,4 @@ jobs:
         with:
           python-version: "3.15"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install h5py
       - run: python -m unittest discover tests -v
