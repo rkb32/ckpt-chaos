@@ -33,7 +33,91 @@ import sys
 _MUTATING = {"os.rename", "os.remove", "os.mkdir", "os.rmdir", "shutil.copyfile", "shutil.rmtree"}
 _ONE_PATH = {"open", "os.remove", "os.mkdir", "os.rmdir", "shutil.rmtree"}
 _state: dict = {"n": 0, "crash_at": None, "mode": "before", "watch": "", "fd": None, "hooked": False,
-                "py_open": False}
+                "py_open": False, "quiet": False, "unsynced": False,
+                "durable": {}, "dirty": set(), "fd_path": {}, "zero": set()}
+
+
+class _quietly:
+    """Our own file reads and writes during a rollback: not counted, not tracked."""
+
+    def __enter__(self):
+        self.was = _state["quiet"]
+        _state["quiet"] = True
+
+    def __exit__(self, *exc):
+        _state["quiet"] = self.was
+
+
+def _read_bytes(p: str):
+    with _quietly():
+        if not os.path.exists(p):
+            return None
+        with open(p, "rb") as f:
+            return f.read()
+
+
+def _note_open_for_write(p: str) -> None:
+    """Before the job truncates or creates p: remember what was on disk, if it was not tracked yet."""
+    if p not in _state["durable"]:
+        _state["durable"][p] = _read_bytes(p)  # treated as durable: it was there before this run wrote it
+    _state["dirty"].add(p)
+
+
+def _roll_back_unsynced() -> None:
+    """Worst case of the POSIX rules: data not fsynced is lost. Every file written since its last fsync reverts
+    to its last durable content, or disappears if it never had any. Not power loss: no other reordering.
+    """
+    with _quietly():
+        for p in sorted(_state["dirty"]):
+            if p in _state["zero"]:  # renamed into place before its data was synced: the name survives, the data does not
+                if os.path.exists(p):
+                    with open(p, "wb"):
+                        pass
+                continue
+            base = _state["durable"].get(p)
+            if base is None:
+                if os.path.exists(p):
+                    os.remove(p)
+            else:
+                with open(p, "wb") as f:
+                    f.write(base)
+    _state["dirty"].clear()
+    _state["zero"].clear()
+
+
+def _install_fsync() -> None:
+    if getattr(os.fsync, "_ckpt_chaos", False):
+        return
+    orig = os.fsync
+
+    def fsync(fd):
+        result = orig(fd)  # the job's data is on disk now
+        p = _state["fd_path"].get(fd)
+        if p in _state["dirty"]:
+            with _quietly():
+                _state["durable"][p] = _read_bytes(p)
+            _state["dirty"].discard(p)
+        return result
+
+    fsync._ckpt_chaos = True
+    os.fsync = fsync
+
+    def moved(orig):
+        def rename(src, dst, *a, **k):
+            result = orig(src, dst, *a, **k)  # the name moves; the data does not, if it was not synced
+            s, d = _norm(src), _norm(dst)
+            if s in _state["dirty"]:
+                _state["dirty"].discard(s)
+                _state["dirty"].add(d)
+                _state["zero"].add(d)
+            return result
+
+        rename._ckpt_chaos = True
+        return rename
+
+    if not getattr(os.replace, "_ckpt_chaos", False):
+        os.replace = moved(os.replace)
+        os.rename = moved(os.rename)
 
 
 def _norm(p) -> str:
@@ -47,6 +131,8 @@ def _under(p) -> bool:
 
 def _event(kind: str, path, tornable: bool) -> bool:
     """Count one mutation. Returns True if the caller must tear `path` after writing it."""
+    if _state["quiet"]:  # our own reads and rollbacks are not the job's events
+        return False
     _state["n"] += 1
     n = _state["n"]
     if _state["fd"] is not None:  # os.write raises no audit event, so no recursion
@@ -56,6 +142,9 @@ def _event(kind: str, path, tornable: bool) -> bool:
         if _state["mode"] == "term":
             _terminate()
             return False
+        if _state["mode"] == "unsynced":
+            _roll_back_unsynced()
+            os._exit(137)
         if _state["mode"] == "torn" and tornable:
             return True
         os._exit(137)  # no cleanup, no flush: what a kill leaves behind
@@ -158,7 +247,7 @@ def _install_native_wrappers(force_import: bool = False) -> None:
 class _PostImport(importlib.abc.MetaPathFinder):
     """Patch the native writers right after torch / safetensors.torch finish importing."""
 
-    names = ("torch", "safetensors.torch")
+    names = ("torch", "safetensors.torch", "h5py")
 
     def __init__(self):
         self.busy: set[str] = set()
@@ -177,7 +266,10 @@ class _PostImport(importlib.abc.MetaPathFinder):
 
         def exec_module(module):
             original(module)
-            _install_native_wrappers()
+            if module.__name__ == "h5py":
+                _install_h5py_when_ready()
+            else:
+                _install_native_wrappers()
 
         spec.loader.exec_module = exec_module
         return spec
@@ -218,12 +310,62 @@ def _open_wrapper(orig):
         if isinstance(file, (str, os.PathLike)) and isinstance(mode, str) and any(c in mode for c in "wax+") \
                 and _under(file):
             tear = _event("open", file, tornable=True)
+            if _state["unsynced"]:
+                _note_open_for_write(_norm(file))  # before the open truncates the old content
             f = orig(file, mode, *a, **k)
+            if _state["unsynced"]:
+                try:
+                    _state["fd_path"][f.fileno()] = _norm(file)
+                except (AttributeError, OSError, ValueError):
+                    pass
             return _TornFile(f, os.fspath(file)) if tear else f
         return orig(file, mode, *a, **k)
 
     wrapper._ckpt_chaos = True
     return wrapper
+
+
+def _install_h5py() -> None:
+    """Count h5py.File writes under the watch dir, and tear them on close (a torn HDF5 file: half its bytes).
+
+    Like torch.save, the file is written completely by the library, then cut and the process is killed, so
+    what is torn is a real, complete HDF5 file that was cut in half. Patches the File class in place, so
+    isinstance() and every existing reference keep working.
+    """
+    try:
+        from h5py._hl import files as _files
+    except ImportError:
+        return
+    cls = _files.File
+    if getattr(cls.__init__, "_ckpt_chaos", False):
+        return
+    orig_init, orig_close = cls.__init__, cls.close
+
+    def __init__(self, name, mode=None, *a, **k):
+        if isinstance(name, (str, os.PathLike)) and mode in ("w", "w-", "x", "a", "r+") and _under(name):
+            tear = _event("h5py.File", name, tornable=True)
+            orig_init(self, name, mode, *a, **k)
+            if tear:
+                object.__setattr__(self, "_ckpt_tear", os.fspath(name))
+            return
+        orig_init(self, name, mode, *a, **k)
+
+    def close(self):
+        path = getattr(self, "_ckpt_tear", None)
+        orig_close(self)  # the library writes the whole file here
+        if path:
+            _tear(path)
+            os._exit(137)
+
+    __init__._ckpt_chaos = True
+    close._ckpt_chaos = True
+    cls.__init__ = __init__
+    cls.close = close
+
+
+def _install_h5py_when_ready() -> None:
+    # h5py.File lives in a submodule that the package imports after its own module body has run
+    _install_h5py()
 
 
 def _install_python_open() -> None:
@@ -240,11 +382,16 @@ def arm(watch_dir: str, crash_at: int | None = None, mode: str = "before", log_p
 
     torn_python also lets mode "torn" cut files written through Python's open() (not just torch.save).
     """
-    _state.update(n=0, crash_at=crash_at, mode=mode, watch=_norm(watch_dir), py_open=torn_python)
+    _state.update(n=0, crash_at=crash_at, mode=mode, watch=_norm(watch_dir), py_open=torn_python,
+                  unsynced=(mode == "unsynced"))
     if torn_python:
         _install_python_open()
+    if mode == "unsynced":
+        _install_fsync()  # must be in place before the job's first fsync
     if log_path:
         _state["fd"] = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+    if "h5py" in sys.modules:  # already imported: patch now (an import later is caught by _PostImport)
+        _install_h5py()
     if lazy_native:
         _install_native_wrappers()  # in case torch is already imported
         sys.meta_path.insert(0, _PostImport())

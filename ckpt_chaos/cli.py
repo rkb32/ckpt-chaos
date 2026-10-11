@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 DEFAULT_FAIL_ON = "HARD_FAIL,SILENT_DIVERGENCE,CONTROL_FAIL"
-VALID_MODES = ("before", "torn", "term")  # same as byo.MODES; kept here so --help and errors need no heavy import
+VALID_MODES = ("before", "torn", "term", "unsynced")  # same as byo.MODES; kept here so --help and errors need no heavy import
 
 
 def _split(cmd: str) -> list[str]:

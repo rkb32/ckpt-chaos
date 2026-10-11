@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TARGETS = {
     "hf_trainer": "ckpt_chaos.targets.hf_trainer",
     "loop_ddp": "ckpt_chaos.targets.loop_ddp",
+    "dcp_ddp": "ckpt_chaos.targets.dcp_ddp",
     "lightning_trainer": "ckpt_chaos.targets.lightning_trainer",
 }
 PEER_GRACE_S = 3  # after one rank dies, how long the others may run on before we tear them down

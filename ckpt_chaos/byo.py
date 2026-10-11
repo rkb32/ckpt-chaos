@@ -104,7 +104,7 @@ def _newest_complete(ref: Snapshot, got: Snapshot, ignore_size: bool = False) ->
     return best
 
 
-MODES = ("before", "torn", "term")
+MODES = ("before", "torn", "term", "unsynced")
 
 
 def _even(items: list, k: int) -> list:
@@ -128,7 +128,7 @@ def _select(events: list, max_points: int, modes: tuple[str, ...]) -> list[tuple
     share, extra = divmod(max_points, len(modes))
     points: list[tuple[int, str]] = []
     for i, mode in enumerate(modes):
-        pool = [n for n, _, _, tornable in events if tornable] if mode == "torn" else [n for n, *_ in events]
+        pool = [n for n, _, _, tornable in events if tornable] if mode == "torn" else [n for n, *_ in events]  # all events for the rest
         points += [(n, mode) for n in _even(pool, share + (1 if i < extra else 0))]
     return points
 

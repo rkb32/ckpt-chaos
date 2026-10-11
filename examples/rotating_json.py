@@ -18,6 +18,7 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--steps", type=int, default=20)
 ap.add_argument("--every", type=int, default=5)
 ap.add_argument("--bug", action="store_true")
+ap.add_argument("--fsync", action="store_true", help="flush and fsync the temp file before the rename")
 a = ap.parse_args()
 
 os.makedirs(a.out, exist_ok=True)
@@ -41,6 +42,9 @@ while state["step"] < a.steps:
         path = os.path.join(a.out, f"ckpt-{state['step']}.json")
         with open(path + ".tmp", "w") as f:
             json.dump(state, f)
+            if a.fsync:
+                f.flush()
+                os.fsync(f.fileno())  # without this, a power cut can leave the rename without the data behind it
         os.replace(path + ".tmp", path)
 
 with open(os.path.join(a.out, "result.json"), "w") as f:
