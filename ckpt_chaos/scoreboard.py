@@ -11,7 +11,7 @@ from pathlib import Path
 from .invariants import ResumeOutcome, classify
 
 COLUMNS = ["PASS", "HARD_FAIL", "SILENT_DIVERGENCE", "LOST_WORK", "CONTROL_FAIL"]
-VERSION_KEYS = ("torch", "transformers", "lightning", "h5py", "tensorstore")
+VERSION_KEYS = ("torch", "transformers", "lightning", "keras", "h5py", "tensorstore")
 
 
 def summarize(run_dir: Path, name: str | None = None) -> dict:

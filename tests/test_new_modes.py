@@ -1,4 +1,5 @@
 """The modes and checks added after 0.1.3: unsynced writes, torn h5py files, the data-order check, and the DCP target."""
+import os
 import subprocess
 import sys
 import tempfile
@@ -88,6 +89,25 @@ class Tensorstore(unittest.TestCase):
         self.assertIn("tensorstore.write:state.zarr [torn]", p.stdout)
         self.assertIn("HARD_FAIL", p.stdout)
         self.assertIn("tensorstore.write:state.zarr [before]", p.stdout)
+
+
+os.environ.setdefault("KERAS_BACKEND", "torch")
+try:
+    import keras  # noqa: F401
+    HAVE_KERAS = True
+except ImportError:
+    HAVE_KERAS = False
+
+
+@unittest.skipUnless(HAVE_KERAS, "keras is not installed")
+class Keras(unittest.TestCase):
+    def test_a_torn_keras_archive_breaks_the_resume(self):
+        p = run_cli(["examples/keras_ckpt.py"], "--result-file", "{out}/result.json",
+                    "--step-regex", r"resumed from step (\d+)", "--modes", "before,torn", "--max-points", "12")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("open:model.keras [torn]", p.stdout)
+        self.assertIn("HARD_FAIL", p.stdout)
+        self.assertNotIn("SILENT_DIVERGENCE", p.stdout)  # the control must be deterministic
 
 
 class Accelerate(unittest.TestCase):

@@ -26,7 +26,7 @@ from .runner import Row, _events, print_table, rejudge
 
 BOOT = Path(__file__).resolve().parent / "_boot"
 PKG_PARENT = Path(__file__).resolve().parent.parent
-VERSIONED = ("ckpt-chaos", "torch", "transformers", "lightning", "safetensors", "accelerate", "numpy")
+VERSIONED = ("ckpt-chaos", "torch", "transformers", "lightning", "safetensors", "accelerate", "numpy", "keras", "tensorstore", "h5py")
 
 
 def _versions() -> dict:
