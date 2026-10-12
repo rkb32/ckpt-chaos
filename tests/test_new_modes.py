@@ -72,5 +72,14 @@ class DCP(unittest.TestCase):
         self.assertIn("PASS", p.stdout)
 
 
+class Accelerate(unittest.TestCase):
+    def test_accelerate_matrix_finds_failures_and_passes(self):
+        work = Path(tempfile.mkdtemp(prefix="ckptchaos_acc_")) / "work"
+        p = subprocess.run([PY, "-m", "ckpt_chaos", "bench", "accelerate_loop", "--work", str(work), "--jobs", "2"],
+                           cwd=ROOT, capture_output=True, text=True, timeout=900)
+        self.assertIn("HARD_FAIL", p.stdout, p.stdout + p.stderr)
+        self.assertIn("PASS", p.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
