@@ -80,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--modes", default="before,torn", help="comma-separated crash modes: before, torn, term (SIGTERM, "
                    "then a kill after --grace seconds). --max-points is split between them")
     r.add_argument("--grace", type=float, default=5.0, help="term mode: seconds between SIGTERM and the kill (default 5)")
+    r.add_argument("--ranks", type=int, default=1, help="run the command once per rank, with RANK / WORLD_SIZE / MASTER_* set "
+                   "(like torchrun, on this machine). Default 1")
+    r.add_argument("--crash-rank", type=int, default=0, help="with --ranks: the rank that gets the crash (default 0)")
     r.add_argument("command", nargs=argparse.REMAINDER, help="-- followed by your training command")
 
     b = sub.add_parser("bench", help="run a built-in target: hf_trainer, lightning_trainer or loop_ddp")
@@ -187,13 +190,16 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--max-points must be at least 1")
     if not a.grace > 0:
         ap.error("--grace must be a positive number of seconds")
+    if a.ranks < 1:
+        ap.error("--ranks must be at least 1")
     from .byo import run_byo
     from .runner import print_table
 
     try:
         rows = run_byo(command, _split(a.resume_cmd) if a.resume_cmd else None, a.work.resolve(), jobs=a.jobs, timeout=a.timeout,
                        max_points=a.max_points, result_file=a.result_file, result_cmd=a.result_cmd, step_regex=a.step_regex,
-                       checkpoint_glob=a.checkpoint_glob, ignore_size=a.ckpt_ignore_size, modes=modes, grace=a.grace)
+                       checkpoint_glob=a.checkpoint_glob, ignore_size=a.ckpt_ignore_size, modes=modes, grace=a.grace,
+                       ranks=a.ranks, crash_rank=a.crash_rank)
     except (SystemExit, Exception) as e:
         # say why the job never got judged, in the places CI looks: the summary and the JUnit file
         message = e.code if isinstance(e, SystemExit) else f"{type(e).__name__}: {e}"

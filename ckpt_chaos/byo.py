@@ -63,6 +63,52 @@ def _run(cmd: list[str], env: dict, cwd: str, timeout: int) -> tuple[int, str]:
         return -9, "TIMEOUT"
 
 
+PEER_GRACE_S = 3  # after one rank dies, the others get this long before they are killed (as runner.py does)
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _run_group(cmds: list[list[str]], envs: list[dict], cwd: str, timeout: int, wd: Path) -> tuple[int, str]:
+    """Run one copy of the command per rank at once, like a torchrun launch. When a rank dies, the others are given
+    PEER_GRACE_S seconds and then killed (a collective left waiting on a dead peer would hang). Returns the first
+    non-zero exit code (or 0), and rank 0's output. Each rank's output goes to rank<r>.log under wd."""
+    import time
+
+    logs, procs = [], []
+    for r, (c, e) in enumerate(zip(cmds, envs)):
+        f = open(wd / f"rank{r}.log", "w", encoding="utf-8", errors="replace")
+        logs.append(f)
+        procs.append(subprocess.Popen(c, env=e, cwd=cwd, stdout=f, stderr=subprocess.STDOUT))
+    start, first_fail, timed_out = time.time(), None, False
+    while True:
+        alive = [p for p in procs if p.poll() is None]
+        if any(p.returncode not in (None, 0) for p in procs) and first_fail is None:
+            first_fail = time.time()
+        if not alive:
+            break
+        if (first_fail is not None and time.time() - first_fail > PEER_GRACE_S) or time.time() - start > timeout:
+            timed_out = time.time() - start > timeout
+            for p in alive:
+                p.kill()
+            break
+        time.sleep(0.2)
+    for p in procs:
+        p.wait()
+    for f in logs:
+        f.close()
+    codes = [p.returncode for p in procs]
+    text = (wd / "rank0.log").read_text(encoding="utf-8", errors="replace")
+    if timed_out:
+        return -9, "TIMEOUT"
+    return next((c for c in codes if c != 0), 0), text
+
+
 def _result(out: Path, result_file: str | None, result_cmd: str | None, cwd: str, timeout: int) -> str | None:
     """A comparable fingerprint of what the run produced, or None if the user gave no way to check."""
     if result_file:
@@ -136,7 +182,10 @@ def _select(events: list, max_points: int, modes: tuple[str, ...]) -> list[tuple
 def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int = 1, timeout: int = 600,
             max_points: int = 40, result_file: str | None = None, result_cmd: str | None = None,
             step_regex: str | None = None, modes: tuple[str, ...] = ("before", "torn"),
-            checkpoint_glob: str | None = None, ignore_size: bool = False, grace: float = 5.0) -> list[Row]:
+            checkpoint_glob: str | None = None, ignore_size: bool = False, grace: float = 5.0,
+            ranks: int = 1, crash_rank: int = 0) -> list[Row]:
+    if not 0 <= crash_rank < ranks:
+        raise SystemExit(f"--crash-rank must be between 0 and {ranks - 1}")
     if not grace > 0:
         raise SystemExit("--grace must be a positive number of seconds")
     if not any("{out}" in a for a in train):
@@ -154,20 +203,35 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
     step_re = re.compile(step_regex) if step_regex else None
     unmatched: list[int] = []
 
-    def armed(wd: Path, out: Path, crash=None, mode="before") -> dict:
+    def armed(wd: Path, out: Path, crash=None, mode="before", rank: int = 0) -> dict:
         extra = {"CKPT_CHAOS_WATCH": str(out), "CKPT_CHAOS_LOG": str(wd / "events.log"), "CKPT_CHAOS_TORN_PYTHON": "1"}
-        if crash:
+        if crash and rank == crash_rank:  # only the crash rank is killed; the others run until their peer dies
             extra.update(CKPT_CHAOS_CRASH_AT=str(crash), CKPT_CHAOS_MODE=mode, CKPT_CHAOS_GRACE_S=str(grace))
         return extra
+
+    def job(cmd_t: list[str], out: Path, wd: Path, *, crash=None, mode="before", plain: bool = False) -> tuple[int, str]:
+        """One run of the command: a single process, or one per rank with RANK / WORLD_SIZE set (like torchrun)."""
+        if ranks == 1:
+            env = _env() if plain else _env(armed(wd, out, crash, mode))
+            return _run(_sub(cmd_t, out), env, cwd, timeout)
+        port = _free_port()
+        cmds, envs = [], []
+        for r in range(ranks):
+            e = _env() if plain else _env(armed(wd, out, crash, mode, rank=r))
+            e.update(RANK=str(r), LOCAL_RANK=str(r), WORLD_SIZE=str(ranks), MASTER_ADDR="127.0.0.1",
+                     MASTER_PORT=str(port), USE_LIBUV="0")
+            envs.append(e)
+            cmds.append(_sub(cmd_t, out))
+        return _run_group(cmds, envs, cwd, timeout, wd)
 
     print("1/3 fault-free reference run (records every file event under {out}) ...", flush=True)
     ref = work / "reference"
     ref.mkdir(parents=True, exist_ok=True)
     ref_out = ref / "out"
-    rc, text = _run(_sub(train, ref_out), _env(armed(ref, ref_out)), cwd, timeout)
+    rc, text = job(train, ref_out, ref)
     if rc != 0:
         raise SystemExit(f"your command failed on its own (exit {rc}) before any crash was injected:\n{text[-1200:]}")
-    events = _events(ref / "events.log.rank0")
+    events = _events(ref / f"events.log.rank{crash_rank}")
     if not events:
         raise SystemExit("the command made no file changes under {out}. Does it write its checkpoints there?")
     ref_result = _result(ref_out, result_file, result_cmd, cwd, timeout)
@@ -185,7 +249,7 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
     (work / "meta.json").write_text(json.dumps({
         "train": train, "resume": resume, "step_regex": step_regex, "checkpoint_glob": checkpoint_glob,
         "ignore_size": ignore_size, "result_file": result_file, "result_cmd": result_cmd, "work": str(work), "cwd": cwd,
-        "modes": list(modes), "grace": grace,
+        "modes": list(modes), "grace": grace, "ranks": ranks, "crash_rank": crash_rank,
         "reference_steps": sorted(s for s, _ in ref_ckpts.values()) if ref_ckpts else None, "versions": _versions(),
     }, indent=1), encoding="utf-8")
     points = _select(events, max_points, modes)
@@ -211,7 +275,7 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
         wd = work / "pt_control"
         wd.mkdir(parents=True, exist_ok=True)
         out = wd / "out"
-        rc, _ = _run(_sub(train, out), _env(armed(wd, out)), cwd, timeout)
+        rc, _ = job(train, out, wd)
         diff = judge_result(out) if rc == 0 else None
         return record(order, wd, "no crash (control)", rc, False, False,
                       ResumeOutcome(None if rc == 0 else f"ExitCode{rc}", None, 0, diff))
@@ -221,12 +285,14 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
         wd = work / f"pt_{order:03d}"
         wd.mkdir(parents=True, exist_ok=True)
         out = wd / "out"
-        rc, _ = _run(_sub(train, out), _env(armed(wd, out, n, mode)), cwd, timeout)
-        seen = _events(wd / "events.log.rank0")
+        rc, _ = job(train, out, wd, crash=n, mode=mode)
+        seen = _events(wd / f"events.log.rank{crash_rank}")
         # the crash event must be in the log; after a SIGTERM the job may log more events before it is killed
         drift = not any(e[0] == n and e[:3] == plan[n][:3] for e in seen)
         newest = _newest_complete(ref_ckpts, _snapshot(checkpoint_glob, out), ignore_size) if checkpoint_glob else 0
-        rrc, rtext = _run(_sub(resume, out), _env(), cwd, timeout)  # the resume run is not armed
+        rwd = wd / "resume"  # its own folder: its rank logs must not overwrite the crash run's
+        rwd.mkdir(parents=True, exist_ok=True)
+        rrc, rtext = job(resume, out, rwd, plain=True)  # the resume run is not armed
         raised = None if rrc == 0 else ("Timeout" if rtext == "TIMEOUT" else f"ExitCode{rrc}")
         step = None
         if step_re and raised is None:

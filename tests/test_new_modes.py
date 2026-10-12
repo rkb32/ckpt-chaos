@@ -110,6 +110,18 @@ class Keras(unittest.TestCase):
         self.assertNotIn("SILENT_DIVERGENCE", p.stdout)  # the control must be deterministic
 
 
+class MultiRank(unittest.TestCase):
+    def test_per_rank_checkpoints_without_a_common_cut_hang_the_resume(self):
+        # each rank saves its own state; a crash on rank 0 leaves rank 1 ahead, so the ranks resume from different steps
+        # and the all-reduce times out. The control must still pass.
+        p = run_cli(["examples/gloo_allreduce_json.py"], "--result-file", "{out}/result.json",
+                    "--step-regex", r"resumed from step (\d+)", "--modes", "before", "--max-points", "2",
+                    "--ranks", "2", timeout=1500)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("no crash (control)", p.stdout)
+        self.assertIn("HARD_FAIL", p.stdout)
+
+
 class Accelerate(unittest.TestCase):
     def test_accelerate_matrix_finds_failures_and_passes(self):
         work = Path(tempfile.mkdtemp(prefix="ckptchaos_acc_")) / "work"
