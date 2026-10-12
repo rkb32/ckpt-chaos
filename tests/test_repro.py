@@ -80,6 +80,19 @@ class Generated(unittest.TestCase):
         self.assertIn("steps 5, 10, 15, 20", text)
         self.assertNotIn(HOME, text)
 
+    def test_project_folder_and_work_folder_are_hidden_in_every_path_form(self):
+        from ckpt_chaos.repro import _scrub
+
+        meta = {"work": r"C:\Users\ranje\AppData\Local\Temp\w", "cwd": r"C:\Users\ranje\Desktop\ckpt-chaos"}
+        text = (r'File "C:\\Users\\ranje\\Desktop\\ckpt-chaos\\examples\\x.py", line 1' "\n"
+                r"C:\Users\ranje\Desktop\ckpt-chaos\.venv and C:/Users/ranje/Desktop/ckpt-chaos/x" "\n"
+                r"'C:\\Users\\ranje\\AppData\\Local\\Temp\\w\\out'")
+        out = _scrub(text, meta)
+        self.assertNotIn("ranje", out)
+        self.assertNotIn("ckpt-chaos", out)
+        self.assertIn("<project>", out)
+        self.assertIn("<work>", out)
+
     def test_write_refuses_a_run_without_meta(self):
         run = Path(tempfile.mkdtemp())
         with self.assertRaises(SystemExit):

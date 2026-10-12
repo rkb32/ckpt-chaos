@@ -204,6 +204,9 @@ def _scrub(text: str, meta: dict) -> str:
     if meta.get("work"):
         for form in _path_forms(meta["work"]):
             text = text.replace(form, "<work>")
+    if meta.get("cwd"):  # the project folder: its name is local too
+        for form in _path_forms(meta["cwd"]):
+            text = text.replace(form, "<project>")
     for form in _path_forms(str(Path.home())):
         text = text.replace(form, "~")
     return text

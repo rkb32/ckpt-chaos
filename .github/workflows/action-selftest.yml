@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -47,3 +47,24 @@ jobs:
         run: |
           echo "the action did not fail on a job that silently restarts from step 0"
           exit 1
+
+  published:
+    # the Action as a user calls it: the published tag, which installs ckpt-chaos from PyPI, not this checkout
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Published Action, job that resumes correctly (must pass)
+        uses: rkb32/ckpt-chaos@v0.1.5
+        with:
+          command: python examples/rotating_json.py --out {out}
+          checkpoint-glob: "{out}/ckpt-*.json"
+          step-regex: 'resumed from step (\d+)'
+          result-file: "{out}/result.json"
+          fail-on: HARD_FAIL,SILENT_DIVERGENCE,LOST_WORK,CONTROL_FAIL
+          jobs: "2"
+          artifact-name: published-good-${{ matrix.os }}
