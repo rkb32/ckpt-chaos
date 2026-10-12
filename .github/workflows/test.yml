@@ -14,5 +14,5 @@ jobs:
         with:
           python-version: "3.14"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install h5py
+      - run: pip install h5py tensorstore accelerate
       - run: python -m unittest discover tests -v
