@@ -247,7 +247,7 @@ def _install_native_wrappers(force_import: bool = False) -> None:
 class _PostImport(importlib.abc.MetaPathFinder):
     """Patch the native writers right after torch / safetensors.torch finish importing."""
 
-    names = ("torch", "safetensors.torch", "h5py")
+    names = ("torch", "safetensors.torch", "h5py", "tensorstore")
 
     def __init__(self):
         self.busy: set[str] = set()
@@ -268,6 +268,8 @@ class _PostImport(importlib.abc.MetaPathFinder):
             original(module)
             if module.__name__ == "h5py":
                 _install_h5py_when_ready()
+            elif module.__name__ == "tensorstore":
+                _install_tensorstore()
             else:
                 _install_native_wrappers()
 
@@ -363,6 +365,91 @@ def _install_h5py() -> None:
     cls.close = close
 
 
+def _ts_file_path(spec) -> str | None:
+    """The directory a tensorstore spec writes to, when it uses the file kvstore; None otherwise (not tracked)."""
+    kv = spec.get("kvstore") if isinstance(spec, dict) else None
+    if isinstance(kv, dict) and kv.get("driver") == "file" and isinstance(kv.get("path"), str):
+        return os.path.abspath(kv["path"])
+    return None
+
+
+def _walk_stats(root: str) -> dict:
+    found = {}
+    for d, _, files in os.walk(root):
+        for f in files:
+            p = os.path.join(d, f)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            found[p] = (st.st_mtime_ns, st.st_size)
+    return found
+
+
+class _StoreProxy:
+    """A tensorstore TensorStore whose writes are counted as file events. A write is synchronous here:
+    "before" kills before the write starts; "torn" lets the write finish, then cuts the chunk file it changed to half
+    its size and kills the process. Reads and everything else pass straight through."""
+
+    def __init__(self, store, path: str):
+        object.__setattr__(self, "_s", store)
+        object.__setattr__(self, "_p", path)
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+    def __setitem__(self, key, value):
+        self._counted(lambda: self._s.__setitem__(key, value))
+
+    def write(self, value, *a, **k):
+        def go():
+            self._s.write(value, *a, **k).result()  # make it synchronous, so a torn write has finished bytes
+        self._counted(go)
+
+    def _counted(self, do):
+        before = _walk_stats(self._p)
+        tear = _event("tensorstore.write", self._p, tornable=True)
+        do()
+        if tear:
+            changed = sorted(p for p, st in _walk_stats(self._p).items() if before.get(p) != st
+                             and not p.endswith(".zarray") and not p.endswith(".zattrs"))
+            if changed:
+                _tear(changed[0])
+            os._exit(137)
+
+
+class _FutureProxy:
+    def __init__(self, fut, path: str):
+        object.__setattr__(self, "_f", fut)
+        object.__setattr__(self, "_p", path)
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
+
+    def result(self, *a, **k):
+        return _StoreProxy(self._f.result(*a, **k), self._p)
+
+
+def _install_tensorstore() -> None:
+    try:
+        import tensorstore as ts
+    except ImportError:
+        return
+    if getattr(ts.open, "_ckpt_chaos", False):
+        return
+    orig_open = ts.open
+
+    def open_(spec, *a, **k):
+        fut = orig_open(spec, *a, **k)
+        path = _ts_file_path(spec)
+        if path is None:
+            return fut
+        return _FutureProxy(fut, path)
+
+    open_._ckpt_chaos = True
+    ts.open = open_
+
+
 def _install_h5py_when_ready() -> None:
     # h5py.File lives in a submodule that the package imports after its own module body has run
     _install_h5py()
@@ -392,6 +479,8 @@ def arm(watch_dir: str, crash_at: int | None = None, mode: str = "before", log_p
         _state["fd"] = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
     if "h5py" in sys.modules:  # already imported: patch now (an import later is caught by _PostImport)
         _install_h5py()
+    if "tensorstore" in sys.modules:
+        _install_tensorstore()
     if lazy_native:
         _install_native_wrappers()  # in case torch is already imported
         sys.meta_path.insert(0, _PostImport())

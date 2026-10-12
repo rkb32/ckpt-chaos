@@ -72,6 +72,24 @@ class DCP(unittest.TestCase):
         self.assertIn("PASS", p.stdout)
 
 
+try:
+    import tensorstore  # noqa: F401
+    HAVE_TS = True
+except ImportError:
+    HAVE_TS = False
+
+
+@unittest.skipUnless(HAVE_TS, "tensorstore is not installed")
+class Tensorstore(unittest.TestCase):
+    def test_a_torn_chunk_breaks_the_resume_and_a_clean_kill_does_not(self):
+        p = run_cli(["examples/tensorstore_ckpt.py"], "--result-file", "{out}/result.json",
+                    "--step-regex", r"resumed from step (\d+)", "--modes", "before,torn")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("tensorstore.write:state.zarr [torn]", p.stdout)
+        self.assertIn("HARD_FAIL", p.stdout)
+        self.assertIn("tensorstore.write:state.zarr [before]", p.stdout)
+
+
 class Accelerate(unittest.TestCase):
     def test_accelerate_matrix_finds_failures_and_passes(self):
         work = Path(tempfile.mkdtemp(prefix="ckptchaos_acc_")) / "work"
