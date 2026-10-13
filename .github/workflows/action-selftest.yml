@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Published Action, job that resumes correctly (must pass)
-        uses: rkb32/ckpt-chaos@v0.1.5
+        uses: rkb32/ckpt-chaos@v0.1.8
         with:
           command: python examples/rotating_json.py --out {out}
           checkpoint-glob: "{out}/ckpt-*.json"
