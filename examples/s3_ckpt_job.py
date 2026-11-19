@@ -22,8 +22,9 @@ ap.add_argument("--every", type=int, default=5)
 ap.add_argument("--result", required=True)
 a = ap.parse_args()
 
-s3 = boto3.client("s3", endpoint_url=a.endpoint, aws_access_key_id="x", aws_secret_access_key="x",
-                  region_name="us-east-1", config=Config(retries={"max_attempts": 0}))
+# credentials come from the normal boto3 chain (env vars, profile); the moto bench sets dummy ones
+s3 = boto3.client("s3", endpoint_url=a.endpoint, region_name=os.environ.get("AWS_REGION", "us-east-1"),
+                  config=Config(retries={"max_attempts": 0}))
 try:
     s3.create_bucket(Bucket=a.bucket)
 except Exception:  # noqa: BLE001 - already exists

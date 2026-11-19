@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 import boto3
@@ -23,8 +24,10 @@ from ckpt_chaos.invariants import ResumeOutcome, classify  # noqa: E402
 
 ENDPOINT = os.environ.get("S3_ENDPOINT", "http://127.0.0.1:5005")
 JOB = [sys.executable, str(ROOT / "examples" / "s3_ckpt_job.py")]
-s3 = boto3.client("s3", endpoint_url=ENDPOINT, aws_access_key_id="x", aws_secret_access_key="x",
-                  region_name="us-east-1", config=Config(retries={"max_attempts": 0}))
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "x")  # moto accepts any key; real AWS users keep their own
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "x")
+s3 = boto3.client("s3", endpoint_url=ENDPOINT, region_name="us-east-1",
+                  config=Config(retries={"max_attempts": 0}))
 work = Path(tempfile.mkdtemp(prefix="s3bench_"))
 
 
@@ -49,7 +52,8 @@ def complete_prefixes(bucket: str) -> set[int]:
 
 
 # fault-free reference: count the PutObject calls and keep the final state
-ref_bucket = "ck-ref"
+RUN = uuid.uuid4().hex[:8]  # fresh buckets every invocation: a leftover checkpoint would resume past the crash point
+ref_bucket = f"ck-{RUN}-ref"
 ref_out = work / "ref.json"
 _, _ = run(ref_bucket, ref_out)
 ref_state = json.loads(ref_out.read_text())
@@ -58,7 +62,7 @@ print(f"reference: {total_puts} objects, final step {ref_state['step']}")
 
 rows = []
 for n in range(1, total_puts + 1):
-    bucket = f"ck-{n}"
+    bucket = f"ck-{RUN}-{n}"
     result = work / f"r{n}.json"
     rc_train, _ = run(bucket, result, crash_at=n)
     newest = max(complete_prefixes(bucket), default=0)
