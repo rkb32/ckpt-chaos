@@ -150,7 +150,7 @@ def _newest_complete(ref: Snapshot, got: Snapshot, ignore_size: bool = False) ->
     return best
 
 
-MODES = ("before", "torn", "term", "unsynced")
+MODES = ("before", "torn", "term", "unsynced", "enospc")
 
 
 def _even(items: list, k: int) -> list:
@@ -183,7 +183,7 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
             max_points: int = 40, result_file: str | None = None, result_cmd: str | None = None,
             step_regex: str | None = None, modes: tuple[str, ...] = ("before", "torn"),
             checkpoint_glob: str | None = None, ignore_size: bool = False, grace: float = 5.0,
-            ranks: int = 1, crash_rank: int = 0) -> list[Row]:
+            ranks: int = 1, crash_rank: int = 0, saved_regex: str | None = None) -> list[Row]:
     if not 0 <= crash_rank < ranks:
         raise SystemExit(f"--crash-rank must be between 0 and {ranks - 1}")
     if not grace > 0:
@@ -201,6 +201,7 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
     work.mkdir(parents=True, exist_ok=True)
     resume = resume or train
     step_re = re.compile(step_regex) if step_regex else None
+    saved_re = re.compile(saved_regex) if saved_regex else None  # the job prints one line per save that RETURNED
     unmatched: list[int] = []
 
     def armed(wd: Path, out: Path, crash=None, mode="before", rank: int = 0) -> dict:
@@ -285,11 +286,15 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
         wd = work / f"pt_{order:03d}"
         wd.mkdir(parents=True, exist_ok=True)
         out = wd / "out"
-        rc, _ = job(train, out, wd, crash=n, mode=mode)
+        rc, ctext = job(train, out, wd, crash=n, mode=mode)
         seen = _events(wd / f"events.log.rank{crash_rank}")
         # the crash event must be in the log; after a SIGTERM the job may log more events before it is killed
         drift = not any(e[0] == n and e[:3] == plan[n][:3] for e in seen)
-        newest = _newest_complete(ref_ckpts, _snapshot(checkpoint_glob, out), ignore_size) if checkpoint_glob else 0
+        # computed before the resume, which re-saves checkpoints and would hide the loss
+        swallowed = bool(mode == "enospc" and rc == 0 and checkpoint_glob and set(ref_ckpts) - set(_snapshot(checkpoint_glob, out)))
+        disk = _newest_complete(ref_ckpts, _snapshot(checkpoint_glob, out), ignore_size) if checkpoint_glob else 0
+        # with --saved-regex: the newest save that returned before the crash (what the job was promised), not what is on disk
+        newest = max((int(m.group(1)) for m in saved_re.finditer(ctext)), default=0) if saved_re else disk
         rwd = wd / "resume"  # its own folder: its rank logs must not overwrite the crash run's
         rwd.mkdir(parents=True, exist_ok=True)
         rrc, rtext = job(resume, out, rwd, plain=True)  # the resume run is not armed
@@ -302,7 +307,10 @@ def run_byo(train: list[str], resume: list[str] | None, work: Path, *, jobs: int
                 unmatched.append(order)
         diff = judge_result(out) if raised is None else None
         label = f"#{n} {plan[n][1]}:{plan[n][2]} [{mode}]"
-        extra = {"point": [n, mode], "event": [plan[n][1], plan[n][2]], "resume_tail": rtext[-1500:]}
+        # SWALLOWED: a full disk was injected, the job exited 0 without crashing, and a checkpoint the fault-free
+        # run kept is gone at the end. A job that rotates or skips saves on purpose is not flagged: the reference
+        # run has the same config, so only checkpoints it kept and this run lost count.
+        extra = {"point": [n, mode], "event": [plan[n][1], plan[n][2]], "resume_tail": rtext[-1500:], "disk_newest": disk, "swallowed": swallowed}
         return record(order, wd, label, rc, rc != 0, drift, ResumeOutcome(raised, step, newest, diff), extra)
 
     print("2/3 crashing and resuming ...", flush=True)

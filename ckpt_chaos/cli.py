@@ -14,8 +14,8 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_FAIL_ON = "HARD_FAIL,SILENT_DIVERGENCE,CONTROL_FAIL"
-VALID_MODES = ("before", "torn", "term", "unsynced")  # same as byo.MODES; kept here so --help and errors need no heavy import
+DEFAULT_FAIL_ON = "HARD_FAIL,SILENT_DIVERGENCE,CONTROL_FAIL,SWALLOWED"
+VALID_MODES = ("before", "torn", "term", "unsynced", "enospc")  # same as byo.MODES; kept here so --help and errors need no heavy import
 
 
 def _split(cmd: str) -> list[str]:
@@ -63,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--result-file", help="file under {out} whose bytes must match the fault-free run, e.g. '{out}/final.pt'")
     r.add_argument("--result-cmd", help="command whose output must match the fault-free run (use for tolerances)")
     r.add_argument("--step-regex", help="regex with one group that finds the resumed step in the resume output")
+    r.add_argument("--saved-regex", help="regex with one group that finds a save the job reports AFTER it returned; "
+                   "the newest such save before the crash is the checkpoint the job was promised (use with --checkpoint-glob)")
     r.add_argument("--checkpoint-glob", help="glob for your checkpoints, e.g. '{out}/ckpt-*' (step = last number in the name; "
                    "needs --step-regex). A checkpoint is complete if it has the same files and sizes as in the fault-free "
                    "run; resuming from an older one, or from scratch, is LOST_WORK. Keep all checkpoints for this test "
@@ -199,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         rows = run_byo(command, _split(a.resume_cmd) if a.resume_cmd else None, a.work.resolve(), jobs=a.jobs, timeout=a.timeout,
                        max_points=a.max_points, result_file=a.result_file, result_cmd=a.result_cmd, step_regex=a.step_regex,
                        checkpoint_glob=a.checkpoint_glob, ignore_size=a.ckpt_ignore_size, modes=modes, grace=a.grace,
-                       ranks=a.ranks, crash_rank=a.crash_rank)
+                       ranks=a.ranks, crash_rank=a.crash_rank, saved_regex=a.saved_regex)
     except (SystemExit, Exception) as e:
         # say why the job never got judged, in the places CI looks: the summary and the JUnit file
         message = e.code if isinstance(e, SystemExit) else f"{type(e).__name__}: {e}"

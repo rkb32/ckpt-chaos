@@ -26,6 +26,7 @@ TARGETS = {
     "hf_trainer": "ckpt_chaos.targets.hf_trainer",
     "loop_ddp": "ckpt_chaos.targets.loop_ddp",
     "dcp_ddp": "ckpt_chaos.targets.dcp_ddp",
+    "fsdp_dcp": "ckpt_chaos.targets.fsdp_dcp",
     "accelerate_loop": "ckpt_chaos.targets.accelerate_loop",
     "lightning_trainer": "ckpt_chaos.targets.lightning_trainer",
 }
@@ -198,7 +199,9 @@ class Row:
 
 def _judge(rec: dict) -> Row:
     o = ResumeOutcome(**rec["outcome"])
-    if rec["label"].startswith("no crash") and rec.get("rc", 0) != 0:
+    if rec.get("swallowed"):
+        verdict = "SWALLOWED"  # a full disk was injected, the job exited 0, and a kept checkpoint is missing
+    elif rec["label"].startswith("no crash") and rec.get("rc", 0) != 0:
         verdict = "CONTROL_FAIL"  # the fault-free run itself died: the save protocol is broken before any crash
     else:
         try:

@@ -10,7 +10,7 @@ save. Two sources of events:
 
 Each event can be crashed in mode "before" (the file never appears), mode
 "torn" (the file appears, cut to half its size; native writers, and Python
-open() with torn_python) or mode "term" (the job gets SIGTERM and runs on until
+open() with torn_python) or mode "enospc" (the write raises ENOSPC and the job keeps running, as on a full disk) or "term" (the job gets SIGTERM and runs on until
 it exits or the grace period CKPT_CHAOS_GRACE_S runs out, as in a preemption).
 Events are logged to `log_path` so a report can name the exact boundary.
 
@@ -145,6 +145,10 @@ def _event(kind: str, path, tornable: bool) -> bool:
         if _state["mode"] == "unsynced":
             _roll_back_unsynced()
             os._exit(137)
+        if _state["mode"] == "enospc":
+            import errno
+            # the disk fills up here: the job gets an OSError and keeps running, as a real job would
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), os.fspath(path))
         if _state["mode"] == "torn" and tornable:
             return True
         os._exit(137)  # no cleanup, no flush: what a kill leaves behind
