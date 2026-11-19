@@ -1,0 +1,13 @@
+# Changelog
+
+## 0.2.0
+
+- New verdict **SWALLOWED**: a disk-full error (`--modes enospc`) was caught by the job, the job exited 0, and a
+  checkpoint the fault-free run kept is missing at the end. It is in the default `--fail-on` list, so exit codes
+  change for existing users. Opt out with `--fail-on HARD_FAIL,SILENT_DIVERGENCE,CONTROL_FAIL`.
+- New crash mode `enospc`: the write raises ENOSPC and the job keeps running.
+- New `--saved-regex`: the newest save the job reports after it returned defines the checkpoint it was promised,
+  instead of what is on disk. Use it for jobs that delete old checkpoints on purpose.
+- New target `fsdp_dcp` (FSDP sharding with torch.distributed.checkpoint, CPU/gloo).
+- New examples: `rotate_delete.py`, `swallow_enospc.py`, `object_store_ckpt.py` (folder stand-in for an object store).
+- Tests: `tests/test_swallow.py`.

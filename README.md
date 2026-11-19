@@ -266,3 +266,10 @@ wrong; it shows these four setups do not trigger it.
 
 See [ROADMAP.md](ROADMAP.md): the features ranked by the evidence behind them (what developers actually
 report in GitHub issues and papers), what is done, and what is not verified.
+
+## Object stores (S3, GCS) and what this tool models
+
+examples/object_store_ckpt.py saves each checkpoint as several objects under one prefix, metadata last, into a
+local folder. It models the object-store risk that matters here: a prefix that is only partly written, with no commit
+marker. A real bucket was not tested. The semantics argument: a single object write is all-or-nothing, so readers see
+missing objects, not torn ones; the gap that remains is the window between copy and delete when a rename is emulated.
