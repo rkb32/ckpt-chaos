@@ -271,5 +271,6 @@ report in GitHub issues and papers), what is done, and what is not verified.
 
 examples/object_store_ckpt.py saves each checkpoint as several objects under one prefix, metadata last, into a
 local folder. It models the object-store risk that matters here: a prefix that is only partly written, with no commit
-marker. A real bucket was not tested. The semantics argument: a single object write is all-or-nothing, so readers see
+marker. examples/s3_bench.py runs the same crash test against moto, and once against real AWS S3 (a single run, see the
+bench's docstring). The semantics argument: a single object write is all-or-nothing, so readers see
 missing objects, not torn ones; the gap that remains is the window between copy and delete when a rename is emulated.
