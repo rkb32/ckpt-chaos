@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- New example `examples/s3_bench.py` and `examples/s3_ckpt_job.py`: crash test against an S3 API, one crash point per
+  PutObject. Default is moto on 127.0.0.1:5005; `S3_ENDPOINT=aws` runs against real AWS.
+- Bench reports INVALID instead of classifying: crash runs that do not exit 137, timeouts, and resumes that fail
+  without `NoSuchKey`. Cleanup deletes only buckets the run named.
+- Job client retries (5 attempts, standard mode) for throttling, 5xx and connection errors.
+
 ## 0.2.0
 
 - New verdict **SWALLOWED**: a disk-full error (`--modes enospc`) was caught by the job, the job exited 0, and a
