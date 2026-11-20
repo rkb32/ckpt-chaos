@@ -24,10 +24,11 @@ from ckpt_chaos.invariants import ResumeOutcome, classify  # noqa: E402
 
 ENDPOINT = os.environ.get("S3_ENDPOINT", "http://127.0.0.1:5005")
 JOB = [sys.executable, str(ROOT / "examples" / "s3_ckpt_job.py")]
-os.environ.setdefault("AWS_ACCESS_KEY_ID", "x")  # moto accepts any key; real AWS users keep their own
-os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "x")
+if "127.0.0.1" in ENDPOINT or "localhost" in ENDPOINT:  # moto accepts any key; real AWS uses your profile or keys
+    os.environ.setdefault("AWS_ACCESS_KEY_ID", "x")
+    os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "x")
 s3 = boto3.client("s3", endpoint_url=ENDPOINT, region_name="us-east-1",
-                  config=Config(retries={"max_attempts": 0}))
+                  config=Config(retries={"max_attempts": 5, "mode": "standard"}))  # retry dropped connections (real AWS)
 work = Path(tempfile.mkdtemp(prefix="s3bench_"))
 
 
