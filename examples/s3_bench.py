@@ -24,10 +24,10 @@ from ckpt_chaos.invariants import ResumeOutcome, classify  # noqa: E402
 
 ENDPOINT = os.environ.get("S3_ENDPOINT", "http://127.0.0.1:5005")
 JOB = [sys.executable, str(ROOT / "examples" / "s3_ckpt_job.py")]
-if "127.0.0.1" in ENDPOINT or "localhost" in ENDPOINT:  # moto accepts any key; real AWS uses your profile or keys
+if boto3.Session().get_credentials() is None:  # no profile, env or config creds: moto accepts any key
     os.environ.setdefault("AWS_ACCESS_KEY_ID", "x")
     os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "x")
-s3 = boto3.client("s3", endpoint_url=ENDPOINT, region_name="us-east-1",
+s3 = boto3.client("s3", endpoint_url=ENDPOINT, region_name=os.environ.get("AWS_REGION", "us-east-1"),
                   config=Config(retries={"max_attempts": 5, "mode": "standard"}))  # retry dropped connections (real AWS)
 work = Path(tempfile.mkdtemp(prefix="s3bench_"))
 
@@ -56,7 +56,9 @@ def complete_prefixes(bucket: str) -> set[int]:
 RUN = uuid.uuid4().hex[:8]  # fresh buckets every invocation: a leftover checkpoint would resume past the crash point
 ref_bucket = f"ck-{RUN}-ref"
 ref_out = work / "ref.json"
-_, _ = run(ref_bucket, ref_out)
+rc_ref, ref_stdout = run(ref_bucket, ref_out)
+if rc_ref != 0:
+    raise SystemExit(f"reference run failed (rc={rc_ref}):\n{ref_stdout}")
 ref_state = json.loads(ref_out.read_text())
 total_puts = len(s3.list_objects_v2(Bucket=ref_bucket).get("Contents", []))
 print(f"reference: {total_puts} objects, final step {ref_state['step']}")

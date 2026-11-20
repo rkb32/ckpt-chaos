@@ -24,11 +24,13 @@ a = ap.parse_args()
 
 # credentials come from the normal boto3 chain (env vars, profile); the moto bench sets dummy ones
 s3 = boto3.client("s3", endpoint_url=a.endpoint, region_name=os.environ.get("AWS_REGION", "us-east-1"),
-                  config=Config(retries={"max_attempts": 0}))
+                  config=Config(retries={"max_attempts": 5, "mode": "standard"}))  # retry dropped connections (real AWS)
+region = s3.meta.region_name
+create_kwargs = {} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}
 try:
-    s3.create_bucket(Bucket=a.bucket)
-except Exception:  # noqa: BLE001 - already exists
-    pass
+    s3.create_bucket(Bucket=a.bucket, **create_kwargs)
+except (s3.exceptions.BucketAlreadyOwnedByYou, s3.exceptions.BucketAlreadyExists):
+    pass  # the bucket is already there from an earlier run
 
 CRASH_AT = int(os.environ.get("CKPT_S3_CRASH_AT", "0"))
 puts = {"n": 0}
