@@ -99,12 +99,10 @@ def _is_complete(ckpt: Path, healthy: dict[str, int]) -> bool:
                 json.loads(p.read_text())
             except ValueError:
                 return False
-        elif name.endswith(".pkl"):  # RNG state: its size varies between runs, so check that it loads instead
-            import torch
+        elif name.endswith(".pkl"):  # RNG state: size varies between runs. Check the zip container, never unpickle
+            import zipfile
 
-            try:
-                torch.load(p, map_location="cpu", weights_only=False)
-            except Exception:  # noqa: BLE001 - a file that does not load is not a complete checkpoint
+            if not zipfile.is_zipfile(p) or zipfile.ZipFile(p).testzip() is not None:
                 return False
         elif p.stat().st_size != size:
             return False
