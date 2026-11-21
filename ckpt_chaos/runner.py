@@ -33,6 +33,12 @@ TARGETS = {
     "lightning_trainer": "ckpt_chaos.targets.lightning_trainer",
 }
 PEER_GRACE_S = 3  # after one rank dies, how long the others may run on before we tear them down
+SINGLE_RANK_TARGETS = {"accelerate_auto", "accelerate_guarded", "accelerate_loop"}
+
+
+def validate_bench_ranks(target: str, ranks: int) -> None:
+    if ranks > 1 and target in SINGLE_RANK_TARGETS:
+        raise ValueError(f"{target} only supports a single rank; use --ranks 1")
 
 
 def _env(extra=None) -> dict:
@@ -58,6 +64,7 @@ def _free_port() -> int:
 
 def _launch(target: str, phase: str, out: Path, extra=None, ranks: int = 1, timeout: int = 240) -> int:
     """Run the target as `ranks` processes. Returns the first non-zero exit code, else 0."""
+    validate_bench_ranks(target, ranks)
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, "-m", TARGETS[target], phase, "--out", str(out)]
     port, procs = _free_port(), []

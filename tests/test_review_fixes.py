@@ -87,6 +87,19 @@ class CliRefusals(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("--max-points must be at least 1", p.stderr)
 
+    def test_accelerate_bench_rejects_multiple_ranks_before_starting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "work"
+            for target in ("accelerate_auto", "accelerate_guarded", "accelerate_loop"):
+                for mode in ([], ["--flake", "1"]):
+                    with self.subTest(target=target, mode=mode):
+                        p = subprocess.run([sys.executable, "-m", "ckpt_chaos", "bench", target,
+                                            "--ranks", "2", "--work", str(work), *mode],
+                                           cwd=ROOT, capture_output=True, text=True, timeout=10)
+                        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                        self.assertIn(f"{target} only supports a single rank", p.stderr)
+                        self.assertFalse(work.exists())
+
     def test_junit_is_written_as_an_error_when_the_run_cannot_start(self):
         out = Path(tempfile.mkdtemp(prefix="ckptchaos_junit_err_")) / "junit.xml"
         p = subprocess.run([sys.executable, "-m", "ckpt_chaos", "run", "--junit", str(out), "--",
