@@ -129,6 +129,9 @@ model) and `max-points` to bound the time. The action writes only inside its own
 ckpt-chaos bench hf_trainer                       # HF Trainer, single process (needs torch, transformers, accelerate)
 ckpt-chaos bench hf_trainer --ranks 2             # two gloo ranks
 ckpt-chaos bench lightning_trainer --ranks 2      # needs lightning
+ckpt-chaos bench accelerate_auto                  # Accelerate's own checkpoint naming (needs accelerate); --ranks 2 works
+ckpt-chaos bench accelerate_guarded               # resume tries checkpoints newest first and skips any that fail to load
+ckpt-chaos bench accelerate_loop --ranks 2        # Accelerate, checkpoint-N folders; resume is not guarded
 ckpt-chaos bench loop_ddp --ranks 2 --strategy tmp_rename --flake 25   # repeat the fault-free job, count failures
 ckpt-chaos judge runs/<dir>                       # re-apply the verdict rules to a finished run
 ```

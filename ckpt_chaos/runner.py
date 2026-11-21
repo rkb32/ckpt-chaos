@@ -109,11 +109,14 @@ def _is_complete(ckpt: Path, healthy: dict[str, int]) -> bool:
         elif name.endswith(".pkl"):  # RNG state: size varies between runs. Check the zip container, never unpickle
             import zipfile
 
-            if not zipfile.is_zipfile(p):
-                return False
-            with zipfile.ZipFile(p) as z:
-                if z.testzip() is not None:
+            try:
+                if not zipfile.is_zipfile(p):
                     return False
+                with zipfile.ZipFile(p) as z:
+                    if z.testzip() is not None:
+                        return False
+            except zipfile.BadZipFile:
+                return False
         elif p.stat().st_size != size:
             return False
     return True
@@ -206,7 +209,7 @@ def _run_point(cfg, order, point) -> dict:
     _launch(target, "resume", out, base, ranks)
     raised, resumed, diff, agree = _collect(out, ranks, ref_final)
     tag = "" if ranks == 1 else f"r{rank} "
-    label = "no crash (control)" if point is None else f"{tag}{plan[(rank, n)][1]}:{plan[(rank, n)][2]} [{mode}]"
+    label = "no crash (control)" if point is None else f"{tag}#{n} {plan[(rank, n)][1]}:{plan[(rank, n)][2]} [{mode}]"
     op = out / "outcome_rank0.json"
     skipped = json.loads(op.read_text()).get("skipped", []) if op.exists() else []  # guarded target only
     rec = {

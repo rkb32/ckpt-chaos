@@ -23,6 +23,9 @@ ARM_STEP = 10  # checkpoint-5 already exists; inject while checkpoint-10 is bein
 MAX_STEPS = 30
 
 
+RANK = int(os.environ.get("RANK", "0"))  # one output file per rank, as the runner expects
+
+
 def batch(step: int):
     g = torch.Generator().manual_seed(1000 * step)  # a pure function of the step: resume can replay it
     x = torch.randn(16, 8, generator=g)
@@ -55,7 +58,7 @@ def train(acc, out, model, opt, start, stop_at=None, arm=False):
         opt.step()
         if step % SAVE_EVERY == 0:
             if arm and step == ARM_STEP:
-                arm_from_env(0)
+                arm_from_env(RANK)
             save_checkpoint(acc, out, step)
         if stop_at and step == stop_at:
             return
@@ -72,7 +75,7 @@ def main():
 
     if a.phase == "reference":
         train(acc, a.out, model, opt, 0)
-        torch.save(acc.unwrap_model(model).state_dict(), os.path.join(a.out, "final_rank0.pt"))
+        torch.save(acc.unwrap_model(model).state_dict(), os.path.join(a.out, f"final_rank{RANK}.pt"))
     elif a.phase == "train":
         train(acc, a.out, model, opt, 0, stop_at=ARM_STEP, arm=True)
     else:
@@ -83,10 +86,10 @@ def main():
             start = int(re.fullmatch(r".*checkpoint-(\d+)", ckpt).group(1))
             outcome["resumed_from_step"] = start
             train(acc, a.out, model, opt, start)
-            torch.save(acc.unwrap_model(model).state_dict(), os.path.join(a.out, "final_rank0.pt"))
+            torch.save(acc.unwrap_model(model).state_dict(), os.path.join(a.out, f"final_rank{RANK}.pt"))
         except BaseException as e:  # noqa: BLE001 - every failure mode is a result
             outcome.update(raised=type(e).__name__, message=str(e)[:200])
-        with open(os.path.join(a.out, "outcome_rank0.json"), "w") as f:
+        with open(os.path.join(a.out, f"outcome_rank{RANK}.json"), "w") as f:
             json.dump(outcome, f)
         if outcome["raised"]:
             sys.exit(3)
