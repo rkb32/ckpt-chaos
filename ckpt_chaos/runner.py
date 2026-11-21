@@ -102,8 +102,11 @@ def _is_complete(ckpt: Path, healthy: dict[str, int]) -> bool:
         elif name.endswith(".pkl"):  # RNG state: size varies between runs. Check the zip container, never unpickle
             import zipfile
 
-            if not zipfile.is_zipfile(p) or zipfile.ZipFile(p).testzip() is not None:
+            if not zipfile.is_zipfile(p):
                 return False
+            with zipfile.ZipFile(p) as z:
+                if z.testzip() is not None:
+                    return False
         elif p.stat().st_size != size:
             return False
     return True
