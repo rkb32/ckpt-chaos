@@ -16,7 +16,7 @@ import sys
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .invariants import ResumeOutcome, classify  # torch is imported lazily: `run` mode needs only the stdlib
@@ -28,9 +28,17 @@ TARGETS = {
     "dcp_ddp": "ckpt_chaos.targets.dcp_ddp",
     "fsdp_dcp": "ckpt_chaos.targets.fsdp_dcp",
     "accelerate_loop": "ckpt_chaos.targets.accelerate_loop",
+    "accelerate_guarded": "ckpt_chaos.targets.accelerate_guarded",
+    "accelerate_auto": "ckpt_chaos.targets.accelerate_auto",
     "lightning_trainer": "ckpt_chaos.targets.lightning_trainer",
 }
 PEER_GRACE_S = 3  # after one rank dies, how long the others may run on before we tear them down
+SINGLE_RANK_TARGETS = {"accelerate_auto", "accelerate_guarded", "accelerate_loop"}  # rank-0-only outputs; reject multi-rank
+
+
+def validate_bench_ranks(target: str, ranks: int) -> None:
+    if ranks > 1 and target in SINGLE_RANK_TARGETS:
+        raise ValueError(f"{target} only supports a single rank; use --ranks 1")
 
 
 def _env(extra=None) -> dict:
@@ -56,6 +64,7 @@ def _free_port() -> int:
 
 def _launch(target: str, phase: str, out: Path, extra=None, ranks: int = 1, timeout: int = 240) -> int:
     """Run the target as `ranks` processes. Returns the first non-zero exit code, else 0."""
+    validate_bench_ranks(target, ranks)
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, "-m", TARGETS[target], phase, "--out", str(out)]
     port, procs = _free_port(), []
@@ -97,6 +106,17 @@ def _is_complete(ckpt: Path, healthy: dict[str, int]) -> bool:
                 json.loads(p.read_text())
             except ValueError:
                 return False
+        elif name.endswith(".pkl"):  # RNG state: size varies between runs. Check the zip container, never unpickle
+            import zipfile
+
+            try:
+                if not zipfile.is_zipfile(p):
+                    return False
+                with zipfile.ZipFile(p) as z:
+                    if z.testzip() is not None:
+                        return False
+            except zipfile.BadZipFile:
+                return False
         elif p.stat().st_size != size:
             return False
     return True
@@ -121,7 +141,17 @@ def _lightning_newest(out: Path, healthy: dict[str, int]) -> int:
     return best
 
 
-NEWEST = {"lightning_trainer": _lightning_newest}  # targets whose layout is not checkpoint-N/ directories
+def _auto_newest(out: Path, healthy: dict[str, int]) -> int:
+    """accelerate_auto: checkpoints/checkpoint_K is the save at step (K + 1) * SAVE_EVERY. Newest complete K."""
+    from .targets.accelerate_loop import SAVE_EVERY
+
+    d = out / "checkpoints"
+    ks = [int(m.group(1)) for p in (d.iterdir() if d.is_dir() else [])
+          if (m := re.fullmatch(r"checkpoint_(\d+)", p.name)) and _is_complete(p, healthy)]
+    return (max(ks) + 1) * SAVE_EVERY if ks else 0
+
+
+NEWEST = {"lightning_trainer": _lightning_newest, "accelerate_auto": _auto_newest}  # targets whose layout is not checkpoint-N/ directories
 
 
 def _weights_diff(ref: Path, got: Path) -> float:
@@ -179,9 +209,11 @@ def _run_point(cfg, order, point) -> dict:
     _launch(target, "resume", out, base, ranks)
     raised, resumed, diff, agree = _collect(out, ranks, ref_final)
     tag = "" if ranks == 1 else f"r{rank} "
-    label = "no crash (control)" if point is None else f"{tag}{plan[(rank, n)][1]}:{plan[(rank, n)][2]} [{mode}]"
+    label = "no crash (control)" if point is None else f"{tag}#{n} {plan[(rank, n)][1]}:{plan[(rank, n)][2]} [{mode}]"
+    op = out / "outcome_rank0.json"
+    skipped = json.loads(op.read_text()).get("skipped", []) if op.exists() else []  # guarded target only
     rec = {
-        "order": order, "label": label, "rc": rc, "crashed": rc != 0, "drift": drift,
+        "order": order, "label": label, "rc": rc, "crashed": rc != 0, "drift": drift, "skipped": skipped,
         "outcome": asdict(ResumeOutcome(raised, resumed, newest, diff, agree)),
     }
     (wd / "result.json").write_text(json.dumps(rec))
@@ -195,6 +227,7 @@ class Row:
     drift: bool
     outcome: ResumeOutcome
     verdict: str
+    skipped: list = field(default_factory=list)
 
 
 def _judge(rec: dict) -> Row:
@@ -208,7 +241,7 @@ def _judge(rec: dict) -> Row:
             verdict = classify(o)
         except NotImplementedError:
             verdict = "(todo)"
-    return Row(rec["label"], rec["crashed"], rec["drift"], o, verdict)
+    return Row(rec["label"], rec["crashed"], rec["drift"], o, verdict, rec.get("skipped", []))
 
 
 def rejudge(work: Path) -> list[Row]:
@@ -224,7 +257,11 @@ def run_matrix(work: Path, jobs: int = 3, ranks: int = 1, target: str = "hf_trai
     _launch(target, "reference", ref, base, ranks)
     dry = work / "dry" / "out"
     _launch(target, "train", dry, dict(base, CKPT_CHAOS_WATCH=str(dry), CKPT_CHAOS_LOG=str(work / "dry" / "events.log")), ranks)
-    if target in NEWEST:
+    if target == "accelerate_auto":  # healthy profile = newest save, so _auto_newest can test each folder
+        latest = max(int(m.group(1)) for p in (dry / "checkpoints").iterdir()
+                     if (m := re.fullmatch(r"checkpoint_(\d+)", p.name)))
+        healthy = _profile(dry / "checkpoints" / f"checkpoint_{latest}")
+    elif target in NEWEST:
         healthy = {}
     else:
         healthy_dir = dry / "checkpoint-10"
@@ -270,6 +307,7 @@ def print_table(rows: list[Row]) -> None:
         newest = str(o.newest_complete_step) if known else "-"
         flag = "" if r.crashed or r.label.startswith("no crash") else "  [DID NOT CRASH]"
         flag += "  [PLAN DRIFT]" if r.drift else ""
+        flag += f"  [skipped: {'; '.join(r.skipped)}]" if r.skipped else ""
         print(f"{r.label:<58}{newest:>10}  {result:<26}{diff:>13}  {r.verdict}{flag}")
     counts = Counter(r.verdict for r in rows)
     print("\n" + "  ".join(f"{v}: {c}" for v, c in sorted(counts.items())))

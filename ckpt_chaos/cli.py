@@ -167,10 +167,14 @@ def main(argv: list[str] | None = None) -> int:
         return _exit_code(rows, DEFAULT_FAIL_ON)
 
     if a.cmd == "bench":
-        from .runner import TARGETS, flake_check, print_table, run_matrix
+        from .runner import TARGETS, flake_check, print_table, run_matrix, validate_bench_ranks
 
         if a.target not in TARGETS:
             ap.error(f"target must be one of {sorted(TARGETS)}")
+        try:
+            validate_bench_ranks(a.target, a.ranks)
+        except ValueError as e:
+            ap.error(str(e))
         # absolute, because the child processes run from the package's directory, not from here
         work = (a.work or Path("ckpt-chaos-runs") / time.strftime("%Y%m%d-%H%M%S")).resolve()
         if a.flake:
