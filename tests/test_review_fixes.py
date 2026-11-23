@@ -90,7 +90,7 @@ class CliRefusals(unittest.TestCase):
     def test_accelerate_bench_rejects_multiple_ranks_before_starting(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp) / "work"
-            for target in ("accelerate_loop",):
+            for target in ("accelerate_auto", "accelerate_guarded", "accelerate_loop"):
                 for mode in ([], ["--flake", "1"]):
                     with self.subTest(target=target, mode=mode):
                         p = subprocess.run([sys.executable, "-m", "ckpt_chaos", "bench", target,
