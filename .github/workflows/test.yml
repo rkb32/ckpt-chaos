@@ -17,8 +17,8 @@ jobs:
       - run: pip install h5py tensorstore accelerate
       - run: python -m unittest discover tests -v
 
-  # One stable check name for branch protection. Require "all-green" instead of the matrix job names.
-  all-green:
+  # One stable check name for branch protection, for the test matrix. Require "tests-green", not the matrix job names.
+  tests-green:
     if: always()
     needs: [test]
     runs-on: ubuntu-latest
