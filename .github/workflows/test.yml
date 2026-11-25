@@ -16,3 +16,11 @@ jobs:
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install h5py tensorstore accelerate
       - run: python -m unittest discover tests -v
+
+  # One stable check name for branch protection. Require "all-green" instead of the matrix job names.
+  all-green:
+    if: always()
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = "success"
