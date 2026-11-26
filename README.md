@@ -136,6 +136,8 @@ ckpt-chaos bench loop_ddp --ranks 2 --strategy tmp_rename --flake 25   # repeat 
 ckpt-chaos judge runs/<dir>                       # re-apply the verdict rules to a finished run
 ```
 
+For `accelerate_auto`, a HARD_FAIL row also says `[newest checkpoint incomplete]` when the folder Accelerate resumes from (the highest `checkpoint_K`) is missing files. The verdict and exit code do not change.
+
 Tests: `python -m unittest discover tests`.
 
 ## How it works
