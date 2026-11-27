@@ -68,3 +68,11 @@ jobs:
           fail-on: HARD_FAIL,SILENT_DIVERGENCE,LOST_WORK,CONTROL_FAIL
           jobs: "2"
           artifact-name: published-good-${{ matrix.os }}
+
+  # One stable check name for branch protection, covering the action jobs in this file (publish.yml runs only on release, so it is excluded).
+  action-green:
+    if: always()
+    needs: [selftest, published]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.selftest.result }}" = "success" && test "${{ needs.published.result }}" = "success"
