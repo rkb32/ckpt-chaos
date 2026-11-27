@@ -151,6 +151,14 @@ def _auto_newest(out: Path, healthy: dict[str, int]) -> int:
     return (max(ks) + 1) * SAVE_EVERY if ks else 0
 
 
+def _latest_incomplete(out: Path, healthy: dict[str, int]) -> bool:
+    """accelerate_auto: the folder Accelerate resumes from (highest checkpoint_K, no completeness check) is incomplete."""
+    d = out / "checkpoints"
+    ks = [int(m.group(1)) for p in (d.iterdir() if d.is_dir() else [])
+          if (m := re.fullmatch(r"checkpoint_(\d+)", p.name))]
+    return bool(ks) and not _is_complete(d / f"checkpoint_{max(ks)}", healthy)
+
+
 NEWEST = {"lightning_trainer": _lightning_newest, "accelerate_auto": _auto_newest}  # targets whose layout is not checkpoint-N/ directories
 
 
@@ -205,6 +213,7 @@ def _run_point(cfg, order, point) -> dict:
     seen = _events(wd / f"events.log.rank{rank}")
     drift = bool(point) and (not seen or seen[-1][:3] != plan[(rank, n)][:3])
     newest = NEWEST.get(target, _newest_complete)(out, healthy)  # measured before resume repairs anything
+    incomplete = target == "accelerate_auto" and _latest_incomplete(out, healthy)
 
     _launch(target, "resume", out, base, ranks)
     raised, resumed, diff, agree = _collect(out, ranks, ref_final)
@@ -214,7 +223,7 @@ def _run_point(cfg, order, point) -> dict:
     skipped = json.loads(op.read_text()).get("skipped", []) if op.exists() else []  # guarded target only
     rec = {
         "order": order, "label": label, "rc": rc, "crashed": rc != 0, "drift": drift, "skipped": skipped,
-        "outcome": asdict(ResumeOutcome(raised, resumed, newest, diff, agree)),
+        "outcome": asdict(ResumeOutcome(raised, resumed, newest, diff, agree)), "incomplete_latest": incomplete,
     }
     (wd / "result.json").write_text(json.dumps(rec))
     return rec
@@ -228,6 +237,7 @@ class Row:
     outcome: ResumeOutcome
     verdict: str
     skipped: list = field(default_factory=list)
+    cause: str = ""
 
 
 def _judge(rec: dict) -> Row:
@@ -241,7 +251,8 @@ def _judge(rec: dict) -> Row:
             verdict = classify(o)
         except NotImplementedError:
             verdict = "(todo)"
-    return Row(rec["label"], rec["crashed"], rec["drift"], o, verdict, rec.get("skipped", []))
+    cause = "newest checkpoint incomplete" if verdict == "HARD_FAIL" and rec.get("incomplete_latest") else ""
+    return Row(rec["label"], rec["crashed"], rec["drift"], o, verdict, rec.get("skipped", []), cause)
 
 
 def rejudge(work: Path) -> list[Row]:
@@ -308,6 +319,7 @@ def print_table(rows: list[Row]) -> None:
         flag = "" if r.crashed or r.label.startswith("no crash") else "  [DID NOT CRASH]"
         flag += "  [PLAN DRIFT]" if r.drift else ""
         flag += f"  [skipped: {'; '.join(r.skipped)}]" if r.skipped else ""
+        flag += f"  [{r.cause}]" if r.cause else ""
         print(f"{r.label:<58}{newest:>10}  {result:<26}{diff:>13}  {r.verdict}{flag}")
     counts = Counter(r.verdict for r in rows)
     print("\n" + "  ".join(f"{v}: {c}" for v, c in sorted(counts.items())))

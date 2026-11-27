@@ -3,7 +3,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from ckpt_chaos.runner import _auto_newest, _is_complete
+from ckpt_chaos.runner import _auto_newest, _is_complete, _latest_incomplete
 
 
 class AutoNewest(unittest.TestCase):
@@ -47,6 +47,36 @@ class RngStateComplete(unittest.TestCase):
     def test_missing_file_is_incomplete(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertFalse(_is_complete(Path(d), {"random_states_0.pkl": 0}))
+
+
+class LatestIncomplete(unittest.TestCase):
+    """The folder accelerate_auto resumes from is the highest checkpoint_K, with no completeness check."""
+
+    HEALTHY = {"model.safetensors": 4, "optimizer.bin": 4}
+
+    def _make(self, out, k, files):
+        ck = out / "checkpoints" / f"checkpoint_{k}"
+        ck.mkdir(parents=True)
+        for name, size in files.items():
+            (ck / name).write_bytes(b"x" * size)
+
+    def test_half_written_newest_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            self._make(out, 0, self.HEALTHY)
+            self._make(out, 1, {"model.safetensors": 4})  # optimizer.bin missing
+            self.assertTrue(_latest_incomplete(out, self.HEALTHY))
+
+    def test_complete_newest_is_not_flagged(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            self._make(out, 0, {"model.safetensors": 4})  # older is broken, newest is fine
+            self._make(out, 1, self.HEALTHY)
+            self.assertFalse(_latest_incomplete(out, self.HEALTHY))
+
+    def test_no_checkpoints_is_not_flagged(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(_latest_incomplete(Path(d), self.HEALTHY))
 
 
 if __name__ == "__main__":
