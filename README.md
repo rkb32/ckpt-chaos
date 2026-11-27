@@ -3,6 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/ckpt-chaos)](https://pypi.org/project/ckpt-chaos/)
 [![tests](https://github.com/rkb32/ckpt-chaos/actions/workflows/test.yml/badge.svg)](https://github.com/rkb32/ckpt-chaos/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/rkb32/ckpt-chaos/blob/main/LICENSE)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/rkb32/ckpt-chaos/blob/feat/colab-notebook/examples/colab_ckpt_chaos.ipynb)
 
 Crash-consistency testing for ML training checkpoints.
 
