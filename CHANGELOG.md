@@ -2,12 +2,6 @@
 
 ## Unreleased
 
-- New example `examples/s3_bench.py` and `examples/s3_ckpt_job.py`: crash test against an S3 API, one crash point per
-  PutObject. Default is moto on 127.0.0.1:5005; `S3_ENDPOINT=aws` runs against real AWS.
-- Bench reports INVALID instead of classifying: crash runs that do not exit 137, timeouts, and resumes that fail
-  without `NoSuchKey`. Cleanup deletes only buckets the run named.
-- Job client retries (5 attempts, standard mode) for throttling, 5xx and connection errors.
-
 ## 1.0.0
 
 - New S3 crash-test example: `examples/s3_bench.py` and `examples/s3_ckpt_job.py`. Runs against moto by default, or real AWS with `S3_ENDPOINT=aws`.
