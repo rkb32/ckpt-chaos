@@ -8,6 +8,16 @@
   without `NoSuchKey`. Cleanup deletes only buckets the run named.
 - Job client retries (5 attempts, standard mode) for throttling, 5xx and connection errors.
 
+## 1.0.0
+
+- New S3 crash-test example: `examples/s3_bench.py` and `examples/s3_ckpt_job.py`. Runs against moto by default, or real AWS with `S3_ENDPOINT=aws`.
+- Bench reports INVALID instead of guessing when a crash run does not exit cleanly, times out, or fails a resume without `NoSuchKey`.
+- Job client retries (5 attempts) on throttling, 5xx, and connection errors.
+- `accelerate_auto` HARD_FAIL rows say "newest checkpoint incomplete" when that applies. Single-rank only; the verdict is unchanged.
+- Colab notebook: `examples/colab_ckpt_chaos.ipynb`, CPU only, pinned to v0.2.0.
+- CI: `tests-green` and `action-green` aggregate checks.
+- Known gap: 2-rank `accelerate_auto` HARD_FAILs are unexplained and unlabeled. Tracked in #18.
+
 ## 0.2.0
 
 - New verdict **SWALLOWED**: a disk-full error (`--modes enospc`) was caught by the job, the job exited 0, and a
