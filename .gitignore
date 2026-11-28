@@ -8,3 +8,6 @@ ckpt-chaos-runs/
 build/
 dist/
 *.log
+
+# Local AI-tool rules, not for the repo
+CLAUDE.md
