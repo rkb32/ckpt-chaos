@@ -33,7 +33,7 @@ TARGETS = {
     "lightning_trainer": "ckpt_chaos.targets.lightning_trainer",
 }
 PEER_GRACE_S = 3  # after one rank dies, how long the others may run on before we tear them down
-SINGLE_RANK_TARGETS = {"accelerate_auto", "accelerate_guarded", "accelerate_loop"}  # rank-0-only outputs; reject multi-rank
+SINGLE_RANK_TARGETS = {"accelerate_guarded", "accelerate_loop"}  # rank-0-only outputs; reject multi-rank (accelerate_auto allowed: 2-rank HARD_FAILs carry the cause label)
 
 
 def validate_bench_ranks(target: str, ranks: int) -> None:
