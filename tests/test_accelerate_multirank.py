@@ -35,7 +35,10 @@ class TwoRankAuto(unittest.TestCase):
         self.assertIn("no crash (control)", p.stdout, p.stdout + p.stderr)
         self.assertIn("HARD_FAIL", p.stdout, p.stdout + p.stderr)
         self.assertIn("PASS", p.stdout, p.stdout + p.stderr)
-        self.assertIn("[newest checkpoint incomplete]", p.stdout, p.stdout + p.stderr)
+        rows = [ln for ln in p.stdout.splitlines() if " HARD_FAIL" in ln]  # table rows, not the "HARD_FAIL: n" summary
+        self.assertTrue(rows, p.stdout)
+        unlabeled = [ln for ln in rows if "[newest checkpoint incomplete]" not in ln]
+        self.assertEqual(unlabeled, [], p.stdout)
 
 
 if __name__ == "__main__":
